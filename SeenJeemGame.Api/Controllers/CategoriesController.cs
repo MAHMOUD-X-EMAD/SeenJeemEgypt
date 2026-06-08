@@ -72,4 +72,19 @@ public class CategoriesController : ControllerBase
 
         return NoContent();
     }
+    [HttpPost("bulk")]
+    public async Task<ActionResult<BulkCreateCategoriesResponse>> BulkCreate(
+    List<CreateCategoryRequest> requests)
+    {
+        try
+        {
+            var result = await _categoryService.BulkCreateAsync(requests);
+
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+    }
 }

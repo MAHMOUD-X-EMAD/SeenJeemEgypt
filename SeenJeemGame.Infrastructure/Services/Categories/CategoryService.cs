@@ -122,4 +122,109 @@ public class CategoryService : ICategoryService
 
         return true;
     }
+    public async Task<BulkCreateCategoriesResponse> BulkCreateAsync(
+    List<CreateCategoryRequest> requests)
+    {
+        var response = new BulkCreateCategoriesResponse
+        {
+            TotalReceived = requests?.Count ?? 0
+        };
+
+        if (requests is null || requests.Count == 0)
+        {
+            response.Errors.Add("Categories list is required.");
+            response.ErrorCount = response.Errors.Count;
+            return response;
+        }
+
+        var normalizedNames = requests
+            .Where(x => !string.IsNullOrWhiteSpace(x.Name))
+            .Select(x => x.Name.Trim().ToLower())
+            .Distinct()
+            .ToList();
+
+        var existingNames = await _dbContext.Categories
+            .Where(x => normalizedNames.Contains(x.Name.ToLower()))
+            .Select(x => x.Name.ToLower())
+            .ToListAsync();
+
+        var payloadNames = new HashSet<string>();
+        var categoriesToInsert = new List<Category>();
+
+        for (var i = 0; i < requests.Count; i++)
+        {
+            var request = requests[i];
+
+            if (request is null)
+            {
+                response.Errors.Add($"Row {i + 1}: Category object is null.");
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(request.Name))
+            {
+                response.Errors.Add($"Row {i + 1}: Category name is required.");
+                continue;
+            }
+
+            var trimmedName = request.Name.Trim();
+            var normalizedName = trimmedName.ToLower();
+
+            if (existingNames.Contains(normalizedName))
+            {
+                response.SkippedDuplicatesCount++;
+                response.SkippedDuplicateNames.Add(trimmedName);
+                continue;
+            }
+
+            if (payloadNames.Contains(normalizedName))
+            {
+                response.SkippedDuplicatesCount++;
+                response.SkippedDuplicateNames.Add(trimmedName);
+                continue;
+            }
+
+            payloadNames.Add(normalizedName);
+
+            categoriesToInsert.Add(new Category
+            {
+                Name = trimmedName,
+                Description = request.Description?.Trim(),
+                ImageUrl = request.ImageUrl?.Trim(),
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow
+            });
+        }
+
+        response.ErrorCount = response.Errors.Count;
+
+        if (categoriesToInsert.Count == 0)
+        {
+            return response;
+        }
+
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync();
+
+        _dbContext.Categories.AddRange(categoriesToInsert);
+
+        await _dbContext.SaveChangesAsync();
+        await transaction.CommitAsync();
+
+        response.InsertedCount = categoriesToInsert.Count;
+
+        response.InsertedCategories = categoriesToInsert
+            .OrderBy(x => x.Id)
+            .Select(x => new CategoryDto
+            {
+                Id = x.Id,
+                Name = x.Name,
+                Description = x.Description,
+                ImageUrl = x.ImageUrl,
+                IsActive = x.IsActive,
+                QuestionsCount = 0
+            })
+            .ToList();
+
+        return response;
+    }
 }

@@ -10,6 +10,9 @@ public interface ICategoryService
 
     Task<CategoryDto> CreateAsync(CreateCategoryRequest request);
 
+    Task<BulkCreateCategoriesResponse> BulkCreateAsync(
+        List<CreateCategoryRequest> requests);
+
     Task<bool> UpdateAsync(int id, UpdateCategoryRequest request);
 
     Task<bool> DeleteAsync(int id);
