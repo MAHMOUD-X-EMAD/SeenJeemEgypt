@@ -103,4 +103,25 @@ public class GamesController : ControllerBase
             return BadRequest(ex.Message);
         }
     }
+
+    [HttpPost("{gameSessionId:guid}/turns/{gameTurnId:guid}/use-help-option")]
+    public async Task<ActionResult<UseHelpOptionResponse>> UseHelpOption(
+    Guid gameSessionId,
+    Guid gameTurnId,
+    UseHelpOptionRequest request)
+    {
+        try
+        {
+            var result = await _gamePlayService.UseHelpOptionAsync(
+                gameSessionId,
+                gameTurnId,
+                request);
+
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+    }
 }

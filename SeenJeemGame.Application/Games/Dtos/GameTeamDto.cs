@@ -10,5 +10,5 @@ public class GameTeamDto
 
     public int TurnOrder { get; set; }
 
-    public List<string> HelpOptions { get; set; } = new();
+    public List<TeamHelpOptionDto> HelpOptions { get; set; } = new();
 }

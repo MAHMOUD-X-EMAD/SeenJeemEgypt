@@ -16,4 +16,9 @@ public interface IGamePlayService
         Guid gameSessionId,
         Guid gameTurnId,
         AwardPointsRequest request);
+
+    Task<UseHelpOptionResponse> UseHelpOptionAsync(
+    Guid gameSessionId,
+    Guid gameTurnId,
+    UseHelpOptionRequest request);
 }

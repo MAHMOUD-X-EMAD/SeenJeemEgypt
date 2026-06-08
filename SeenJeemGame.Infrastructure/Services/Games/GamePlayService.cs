@@ -342,4 +342,115 @@ public class GamePlayService : IGamePlayService
                 .ToList()
         };
     }
+
+    public async Task<UseHelpOptionResponse> UseHelpOptionAsync(
+    Guid gameSessionId,
+    Guid gameTurnId,
+    UseHelpOptionRequest request)
+    {
+        if (request.TeamId == Guid.Empty)
+            throw new InvalidOperationException("Team id is required.");
+
+        if (string.IsNullOrWhiteSpace(request.Type))
+            throw new InvalidOperationException("Help option type is required.");
+
+        if (!Enum.TryParse<HelpOptionType>(request.Type, true, out var helpType))
+            throw new InvalidOperationException("Invalid help option type.");
+
+        if (helpType == HelpOptionType.DoublePoints)
+            throw new InvalidOperationException("Double points must be used before selecting the question.");
+
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync();
+
+        var turn = await _dbContext.GameTurns
+            .FirstOrDefaultAsync(x =>
+                x.Id == gameTurnId &&
+                x.GameSessionId == gameSessionId);
+
+        if (turn is null)
+            throw new InvalidOperationException("Game turn not found.");
+
+        if (turn.Status == TurnStatus.Completed)
+            throw new InvalidOperationException("This turn is already completed.");
+
+        if (turn.Status == TurnStatus.AnswerRevealed)
+            throw new InvalidOperationException("You cannot use help option after revealing the answer.");
+
+        if (helpType == HelpOptionType.TwoAnswers && request.TeamId != turn.MainTeamId)
+            throw new InvalidOperationException("Two answers can only be used by the current turn team.");
+
+        if (helpType == HelpOptionType.StopPlayer && request.TeamId != turn.SecondTeamId)
+            throw new InvalidOperationException("Stop player can only be used by the opponent team.");
+
+        var teamExists = await _dbContext.Teams
+            .AnyAsync(x =>
+                x.Id == request.TeamId &&
+                x.GameSessionId == gameSessionId);
+
+        if (!teamExists)
+            throw new InvalidOperationException("Team does not belong to this game.");
+
+        var helpOption = await _dbContext.TeamHelpOptions
+            .FirstOrDefaultAsync(x =>
+                x.TeamId == request.TeamId &&
+                x.Type == helpType);
+
+        if (helpOption is null)
+            throw new InvalidOperationException("Help option is not available for this team.");
+
+        if (helpOption.IsUsed)
+            throw new InvalidOperationException("Help option has already been used.");
+
+        helpOption.IsUsed = true;
+        helpOption.UsedAt = DateTime.UtcNow;
+        helpOption.UsedInTurnId = turn.Id;
+
+        if (helpType == HelpOptionType.TwoAnswers)
+        {
+            turn.IsTwoAnswersUsed = true;
+        }
+
+        if (helpType == HelpOptionType.StopPlayer)
+        {
+            turn.IsStopPlayerUsed = true;
+
+            if (request.PlayerId.HasValue)
+            {
+                var player = await _dbContext.Players
+                    .FirstOrDefaultAsync(x =>
+                        x.Id == request.PlayerId.Value &&
+                        x.TeamId == turn.MainTeamId);
+
+                if (player is null)
+                    throw new InvalidOperationException("Player not found in the current turn team.");
+
+                player.IsStoppedForCurrentQuestion = true;
+                turn.StoppedPlayerId = player.Id;
+            }
+        }
+
+        await _dbContext.SaveChangesAsync();
+        await transaction.CommitAsync();
+
+        return new UseHelpOptionResponse
+        {
+            GameTurnId = turn.Id,
+            TeamId = request.TeamId,
+            Type = helpType.ToString(),
+            Title = GetHelpOptionTitle(helpType),
+            IsUsed = true,
+            UsedAt = helpOption.UsedAt!.Value
+        };
+    }
+
+    private static string GetHelpOptionTitle(HelpOptionType type)
+    {
+        return type switch
+        {
+            HelpOptionType.DoublePoints => "دبل النقط",
+            HelpOptionType.TwoAnswers => "إجابتين",
+            HelpOptionType.StopPlayer => "إيقاف لاعب",
+            _ => type.ToString()
+        };
+    }
 }

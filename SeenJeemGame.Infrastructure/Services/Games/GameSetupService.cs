@@ -135,6 +135,7 @@ public class GameSetupService : IGameSetupService
             {
                 x.Id,
                 x.RoomCode,
+                x.CurrentTurnId,
                 x.Status
             })
             .FirstOrDefaultAsync();
@@ -143,21 +144,38 @@ public class GameSetupService : IGameSetupService
             return null;
 
         var teams = await _dbContext.Teams
-            .AsNoTracking()
-            .Where(x => x.GameSessionId == gameSessionId)
-            .OrderBy(x => x.TurnOrder)
-            .Select(x => new GameTeamDto
+    .Include(x => x.HelpOptions)
+    .Where(x => x.GameSessionId == gameSessionId)
+    .OrderBy(x => x.TurnOrder)
+    .ToListAsync();
+
+        var completedTurnsCount = await _dbContext.GameTurns
+            .CountAsync(x =>
+                x.GameSessionId == gameSessionId &&
+                x.Status == TurnStatus.Completed);
+
+        Team? currentTurnTeam = null;
+
+        if (game.CurrentTurnId.HasValue)
+        {
+            var activeTurn = await _dbContext.GameTurns
+                .FirstOrDefaultAsync(x =>
+                    x.Id == game.CurrentTurnId.Value &&
+                    x.GameSessionId == gameSessionId &&
+                    x.Status != TurnStatus.Completed);
+
+            if (activeTurn is not null)
             {
-                Id = x.Id,
-                Name = x.Name,
-                Score = x.Score,
-                TurnOrder = x.TurnOrder,
-                HelpOptions = x.HelpOptions
-                    .OrderBy(h => h.Type)
-                    .Select(h => h.Type.ToString())
-                    .ToList()
-            })
-            .ToListAsync();
+                currentTurnTeam = teams.FirstOrDefault(x => x.Id == activeTurn.MainTeamId);
+            }
+        }
+
+        if (currentTurnTeam is null && teams.Count == 2)
+        {
+            currentTurnTeam = completedTurnsCount % 2 == 0
+                ? teams.First(x => x.TurnOrder == 1)
+                : teams.First(x => x.TurnOrder == 2);
+        }
 
         var categories = await _dbContext.GameCategories
             .AsNoTracking()
@@ -188,8 +206,42 @@ public class GameSetupService : IGameSetupService
             GameSessionId = game.Id,
             RoomCode = game.RoomCode,
             Status = game.Status.ToString(),
-            Teams = teams,
+
+            CurrentTurnTeamId = currentTurnTeam?.Id,
+            CurrentTurnTeamName = currentTurnTeam?.Name,
+            CurrentTurnOrder = currentTurnTeam?.TurnOrder,
+
+            Teams = teams.Select(team => new GameTeamDto
+            {
+                Id = team.Id,
+                Name = team.Name,
+                Score = team.Score,
+                TurnOrder = team.TurnOrder,
+                HelpOptions = team.HelpOptions
+                    .OrderBy(x => x.Type)
+                    .Select(x => new TeamHelpOptionDto
+                    {
+                        Id = x.Id,
+                        Type = x.Type.ToString(),
+                        Title = GetHelpOptionTitle(x.Type),
+                        IsUsed = x.IsUsed,
+                        UsedAt = x.UsedAt
+                    })
+                    .ToList()
+            }).ToList(),
+
             Categories = categories
+        };
+    }
+
+    private static string GetHelpOptionTitle(HelpOptionType type)
+    {
+        return type switch
+        {
+            HelpOptionType.DoublePoints => "دبل النقط",
+            HelpOptionType.TwoAnswers => "إجابتين",
+            HelpOptionType.StopPlayer => "إيقاف لاعب",
+            _ => type.ToString()
         };
     }
 
