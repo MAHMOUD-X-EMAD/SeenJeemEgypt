@@ -1,0 +1,6 @@
+@SeenJeemGame.Api_HostAddress = http://localhost:5036
+
+GET {{SeenJeemGame.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

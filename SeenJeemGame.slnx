@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="SeenJeemGame.Api/SeenJeemGame.Api.csproj" />
+  <Project Path="SeenJeemGame.Application/SeenJeemGame.Application.csproj" />
+  <Project Path="SeenJeemGame.Domain/SeenJeemGame.Domain.csproj" />
+  <Project Path="SeenJeemGame.Infrastructure/SeenJeemGame.Infrastructure.csproj" />
+</Solution>
