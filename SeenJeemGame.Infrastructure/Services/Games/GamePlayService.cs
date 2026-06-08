@@ -41,8 +41,8 @@ public class GamePlayService : IGamePlayService
                     x.Id == game.CurrentTurnId.Value &&
                     x.Status != TurnStatus.Completed);
 
-            if (currentTurnIsStillActive)
-                throw new InvalidOperationException("There is already an active question.");
+            //if (currentTurnIsStillActive)
+            //    throw new InvalidOperationException("There is already an active question.");
         }
 
         var gameQuestion = await _dbContext.GameQuestions
@@ -451,6 +451,61 @@ public class GamePlayService : IGamePlayService
             HelpOptionType.TwoAnswers => "إجابتين",
             HelpOptionType.StopPlayer => "إيقاف لاعب",
             _ => type.ToString()
+        };
+    }
+
+    public async Task<AdjustTeamScoreResponse> AdjustTeamScoreAsync(
+    Guid gameSessionId,
+    AdjustTeamScoreRequest request)
+    {
+        if (request.TeamId == Guid.Empty)
+            throw new InvalidOperationException("Team id is required.");
+
+        if (request.PointsDelta != 100 && request.PointsDelta != -100)
+            throw new InvalidOperationException("Only +100 or -100 is allowed.");
+
+        var gameExists = await _dbContext.GameSessions
+            .AnyAsync(x => x.Id == gameSessionId);
+
+        if (!gameExists)
+            throw new InvalidOperationException("Game session not found.");
+
+        var team = await _dbContext.Teams
+            .FirstOrDefaultAsync(x =>
+                x.Id == request.TeamId &&
+                x.GameSessionId == gameSessionId);
+
+        if (team is null)
+            throw new InvalidOperationException("Team not found in this game.");
+
+        team.Score += request.PointsDelta;
+
+        if (team.Score < 0)
+        {
+            team.Score = 0;
+        }
+
+        await _dbContext.SaveChangesAsync();
+
+        var teams = await _dbContext.Teams
+            .Where(x => x.GameSessionId == gameSessionId)
+            .OrderBy(x => x.TurnOrder)
+            .Select(x => new GameTurnTeamDto
+            {
+                Id = x.Id,
+                Name = x.Name,
+                Score = x.Score,
+                TurnOrder = x.TurnOrder
+            })
+            .ToListAsync();
+
+        return new AdjustTeamScoreResponse
+        {
+            GameSessionId = gameSessionId,
+            TeamId = team.Id,
+            PointsDelta = request.PointsDelta,
+            NewScore = team.Score,
+            Teams = teams
         };
     }
 }

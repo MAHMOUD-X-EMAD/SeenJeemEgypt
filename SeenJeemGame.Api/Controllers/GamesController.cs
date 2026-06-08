@@ -124,4 +124,23 @@ public class GamesController : ControllerBase
             return BadRequest(ex.Message);
         }
     }
+
+    [HttpPost("{gameSessionId:guid}/adjust-score")]
+    public async Task<ActionResult<AdjustTeamScoreResponse>> AdjustScore(
+    Guid gameSessionId,
+    AdjustTeamScoreRequest request)
+    {
+        try
+        {
+            var result = await _gamePlayService.AdjustTeamScoreAsync(
+                gameSessionId,
+                request);
+
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+    }
 }

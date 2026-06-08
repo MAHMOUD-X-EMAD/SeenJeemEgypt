@@ -21,4 +21,8 @@ public interface IGamePlayService
     Guid gameSessionId,
     Guid gameTurnId,
     UseHelpOptionRequest request);
+
+    Task<AdjustTeamScoreResponse> AdjustTeamScoreAsync(
+    Guid gameSessionId,
+    AdjustTeamScoreRequest request);
 }
