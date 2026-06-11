@@ -43,4 +43,8 @@ public class GameTurn
     public Team SecondTeam { get; set; } = null!;
 
     public ICollection<AnswerAttempt> AnswerAttempts { get; set; } = new List<AnswerAttempt>();
+
+    public bool IsTrapUsed { get; set; }
+
+    public Guid? TrapTargetTeamId { get; set; }
 }

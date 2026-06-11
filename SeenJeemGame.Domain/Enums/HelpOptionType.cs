@@ -4,5 +4,6 @@ public enum HelpOptionType
 {
     DoublePoints = 1,
     TwoAnswers = 2,
-    StopPlayer = 3
+    StopPlayer = 3,
+    Trap = 4
 }

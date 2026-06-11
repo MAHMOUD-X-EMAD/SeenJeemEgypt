@@ -79,9 +79,13 @@ public class GameSetupService : IGameSetupService
 
         _dbContext.Teams.AddRange(teamOne, teamTwo);
 
-        var helpOptions = request.HelpOptions
+        var selectedHelpOptions = request.HelpOptions
+            .Append(HelpOptionType.Trap)
             .Distinct()
-            .SelectMany(helpType => new[]
+            .ToList();
+
+        var helpOptions = selectedHelpOptions
+        .SelectMany(helpType => new[]
             {
                 new TeamHelpOption
                 {
@@ -241,6 +245,7 @@ public class GameSetupService : IGameSetupService
             HelpOptionType.DoublePoints => "دبل النقط",
             HelpOptionType.TwoAnswers => "إجابتين",
             HelpOptionType.StopPlayer => "إيقاف لاعب",
+            HelpOptionType.Trap => "فخ",
             _ => type.ToString()
         };
     }

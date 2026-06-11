@@ -255,6 +255,16 @@ public class GamePlayService : IGamePlayService
                 throw new InvalidOperationException("Correct team is not part of this turn.");
         }
 
+        if (turn.IsTrapUsed)
+        {
+            var trapTargetTeamId = turn.TrapTargetTeamId ?? turn.SecondTeamId;
+
+            if (correctTeam is not null && correctTeam.Id != trapTargetTeamId)
+            {
+                throw new InvalidOperationException("After using trap, only the opponent team can answer.");
+            }
+        }
+
         var existingAttempts = await _dbContext.AnswerAttempts
             .Where(x => x.GameTurnId == gameTurnId)
             .ToListAsync();
@@ -292,26 +302,75 @@ public class GamePlayService : IGamePlayService
 
         var pointsAwarded = 0;
 
-        if (correctTeam is not null)
+        if (turn.IsTrapUsed)
         {
-            pointsAwarded = turn.FinalPoints;
+            var trapTargetTeamId = turn.TrapTargetTeamId ?? turn.SecondTeamId;
 
-            correctTeam.Score += pointsAwarded;
+            var trapTargetTeam = teams.FirstOrDefault(x => x.Id == trapTargetTeamId);
 
-            var scoreTransaction = new ScoreTransaction
+            if (trapTargetTeam is null)
+                throw new InvalidOperationException("Trap target team not found.");
+
+            if (correctTeam is not null && correctTeam.Id == trapTargetTeam.Id)
             {
-                Id = Guid.NewGuid(),
-                GameSessionId = gameSessionId,
-                TeamId = correctTeam.Id,
-                GameTurnId = turn.Id,
-                Points = pointsAwarded,
-                Reason = turn.IsDoublePointsUsed
-                    ? $"Correct answer with double points: +{pointsAwarded}"
-                    : $"Correct answer: +{pointsAwarded}",
-                CreatedAt = DateTime.UtcNow
-            };
+                pointsAwarded = turn.FinalPoints;
+                trapTargetTeam.Score += pointsAwarded;
 
-            _dbContext.ScoreTransactions.Add(scoreTransaction);
+                var scoreTransaction = new ScoreTransaction
+                {
+                    Id = Guid.NewGuid(),
+                    GameSessionId = gameSessionId,
+                    TeamId = trapTargetTeam.Id,
+                    GameTurnId = turn.Id,
+                    Points = pointsAwarded,
+                    Reason = $"Trap answered correctly: +{pointsAwarded}",
+                    CreatedAt = DateTime.UtcNow
+                };
+
+                _dbContext.ScoreTransactions.Add(scoreTransaction);
+            }
+            else
+            {
+                pointsAwarded = -turn.FinalPoints;
+                trapTargetTeam.Score += pointsAwarded;
+
+                var scoreTransaction = new ScoreTransaction
+                {
+                    Id = Guid.NewGuid(),
+                    GameSessionId = gameSessionId,
+                    TeamId = trapTargetTeam.Id,
+                    GameTurnId = turn.Id,
+                    Points = pointsAwarded,
+                    Reason = $"Trap failed answer: {pointsAwarded}",
+                    CreatedAt = DateTime.UtcNow
+                };
+
+                _dbContext.ScoreTransactions.Add(scoreTransaction);
+            }
+        }
+        else
+        {
+            if (correctTeam is not null)
+            {
+                pointsAwarded = turn.FinalPoints;
+
+                correctTeam.Score += pointsAwarded;
+
+                var scoreTransaction = new ScoreTransaction
+                {
+                    Id = Guid.NewGuid(),
+                    GameSessionId = gameSessionId,
+                    TeamId = correctTeam.Id,
+                    GameTurnId = turn.Id,
+                    Points = pointsAwarded,
+                    Reason = turn.IsDoublePointsUsed
+                        ? $"Correct answer with double points: +{pointsAwarded}"
+                        : $"Correct answer: +{pointsAwarded}",
+                    CreatedAt = DateTime.UtcNow
+                };
+
+                _dbContext.ScoreTransactions.Add(scoreTransaction);
+            }
         }
 
         turn.Status = TurnStatus.Completed;
@@ -344,9 +403,9 @@ public class GamePlayService : IGamePlayService
     }
 
     public async Task<UseHelpOptionResponse> UseHelpOptionAsync(
-    Guid gameSessionId,
-    Guid gameTurnId,
-    UseHelpOptionRequest request)
+     Guid gameSessionId,
+     Guid gameTurnId,
+     UseHelpOptionRequest request)
     {
         if (request.TeamId == Guid.Empty)
             throw new InvalidOperationException("Team id is required.");
@@ -382,6 +441,9 @@ public class GamePlayService : IGamePlayService
         if (helpType == HelpOptionType.StopPlayer && request.TeamId != turn.SecondTeamId)
             throw new InvalidOperationException("Stop player can only be used by the opponent team.");
 
+        if (helpType == HelpOptionType.Trap && request.TeamId != turn.MainTeamId)
+            throw new InvalidOperationException("Trap can only be used by the current turn team.");
+
         var teamExists = await _dbContext.Teams
             .AnyAsync(x =>
                 x.Id == request.TeamId &&
@@ -400,6 +462,15 @@ public class GamePlayService : IGamePlayService
 
         if (helpOption.IsUsed)
             throw new InvalidOperationException("Help option has already been used.");
+
+        if (helpType == HelpOptionType.Trap)
+        {
+            if (turn.IsTrapUsed)
+                throw new InvalidOperationException("Trap has already been used in this turn.");
+
+            turn.IsTrapUsed = true;
+            turn.TrapTargetTeamId = turn.SecondTeamId;
+        }
 
         helpOption.IsUsed = true;
         helpOption.UsedAt = DateTime.UtcNow;
@@ -450,6 +521,7 @@ public class GamePlayService : IGamePlayService
             HelpOptionType.DoublePoints => "دبل النقط",
             HelpOptionType.TwoAnswers => "إجابتين",
             HelpOptionType.StopPlayer => "إيقاف لاعب",
+            HelpOptionType.Trap => "فخ",
             _ => type.ToString()
         };
     }
