@@ -25,6 +25,15 @@ public class AppDbContext : DbContext
     public DbSet<AnswerAttempt> AnswerAttempts => Set<AnswerAttempt>();
     public DbSet<ScoreTransaction> ScoreTransactions => Set<ScoreTransaction>();
 
+    public DbSet<FinalRoundQuestion> FinalRoundQuestions =>
+    Set<FinalRoundQuestion>();
+
+    public DbSet<FinalRound> FinalRounds =>
+        Set<FinalRound>();
+
+    public DbSet<FinalRoundTeamResult> FinalRoundTeamResults =>
+        Set<FinalRoundTeamResult>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -45,6 +54,94 @@ public class AppDbContext : DbContext
         ConfigureScoreTransactions(modelBuilder);
 
         SeedCategories(modelBuilder);
+
+        modelBuilder.Entity<FinalRoundQuestion>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+
+            entity.Property(x => x.CategoryName)
+                .IsRequired()
+                .HasMaxLength(150);
+
+            entity.Property(x => x.Text)
+                .IsRequired()
+                .HasMaxLength(2000);
+
+            entity.Property(x => x.CorrectAnswer)
+                .IsRequired()
+                .HasMaxLength(500);
+
+            entity.Property(x => x.ImageUrl)
+                .HasMaxLength(1000);
+
+            entity.Property(x => x.AudioUrl)
+                .HasMaxLength(1000);
+
+            entity.Property(x => x.IsActive)
+                .IsRequired();
+
+            entity.Property(x => x.CreatedAt)
+                .IsRequired();
+
+            entity.HasIndex(x => x.IsActive);
+        });
+
+        modelBuilder.Entity<FinalRound>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+
+            entity.Property(x => x.Status)
+                .IsRequired();
+
+            entity.Property(x => x.TimerSeconds)
+                .IsRequired();
+
+            entity.Property(x => x.CreatedAt)
+                .IsRequired();
+
+            entity.HasIndex(x => x.GameSessionId)
+                .IsUnique();
+
+            entity.HasOne(x => x.GameSession)
+                .WithOne(x => x.FinalRound)
+                .HasForeignKey<FinalRound>(x => x.GameSessionId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(x => x.Question)
+                .WithMany(x => x.FinalRounds)
+                .HasForeignKey(x => x.FinalRoundQuestionId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<FinalRoundTeamResult>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+
+            entity.Property(x => x.Wager)
+                .IsRequired();
+
+            entity.Property(x => x.AnswerText)
+                .HasMaxLength(1000);
+
+            entity.Property(x => x.ScoreDelta)
+                .IsRequired();
+
+            entity.HasIndex(x => new
+            {
+                x.FinalRoundId,
+                x.TeamId
+            }).IsUnique();
+
+            entity.HasOne(x => x.FinalRound)
+                .WithMany(x => x.TeamResults)
+                .HasForeignKey(x => x.FinalRoundId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(x => x.Team)
+                .WithMany(x => x.FinalRoundResults)
+                .HasForeignKey(x => x.TeamId)
+                .OnDelete(DeleteBehavior.NoAction);
+        });
     }
 
     private static void ConfigureCategories(ModelBuilder modelBuilder)

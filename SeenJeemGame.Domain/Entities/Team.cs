@@ -21,4 +21,7 @@ public class Team
     public ICollection<TeamHelpOption> HelpOptions { get; set; } = new List<TeamHelpOption>();
 
     public ICollection<ScoreTransaction> ScoreTransactions { get; set; } = new List<ScoreTransaction>();
+
+    public ICollection<FinalRoundTeamResult> FinalRoundResults { get; set; }
+    = new List<FinalRoundTeamResult>();
 }

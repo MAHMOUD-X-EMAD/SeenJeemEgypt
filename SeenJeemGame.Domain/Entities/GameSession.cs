@@ -29,4 +29,6 @@ public class GameSession
     public ICollection<Team> Teams { get; set; } = new List<Team>();
 
     public ICollection<GameTurn> Turns { get; set; } = new List<GameTurn>();
+
+    public FinalRound? FinalRound { get; set; }
 }
