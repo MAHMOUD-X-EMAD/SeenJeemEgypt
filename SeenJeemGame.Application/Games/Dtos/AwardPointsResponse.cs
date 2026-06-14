@@ -13,4 +13,10 @@ public class AwardPointsResponse
     public string Status { get; set; } = string.Empty;
 
     public List<GameTurnTeamDto> Teams { get; set; } = new();
+
+    public string QuestionType { get; set; } = string.Empty;
+
+    public bool IsTie { get; set; }
+
+    public List<Guid> CorrectTeamIds { get; set; } = new();
 }

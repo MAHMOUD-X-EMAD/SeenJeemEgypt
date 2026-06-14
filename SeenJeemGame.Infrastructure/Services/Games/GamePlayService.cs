@@ -1,9 +1,12 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using SeenJeemGame.Application.Games;
 using SeenJeemGame.Application.Games.Dtos;
+using SeenJeemGame.Application.Games.QuestionMetadata;
 using SeenJeemGame.Domain.Entities;
 using SeenJeemGame.Domain.Enums;
 using SeenJeemGame.Infrastructure.Persistence;
+using System.Globalization;
+using System.Text.Json;
 
 namespace SeenJeemGame.Infrastructure.Services.Games;
 
@@ -17,13 +20,14 @@ public class GamePlayService : IGamePlayService
     }
 
     public async Task<SelectedQuestionResponse> SelectQuestionAsync(
-        Guid gameSessionId,
-        SelectQuestionRequest request)
+    Guid gameSessionId,
+    SelectQuestionRequest request)
     {
         if (request.GameQuestionId == Guid.Empty)
             throw new InvalidOperationException("Game question id is required.");
 
-        await using var transaction = await _dbContext.Database.BeginTransactionAsync();
+        await using var transaction =
+            await _dbContext.Database.BeginTransactionAsync();
 
         var game = await _dbContext.GameSessions
             .FirstOrDefaultAsync(x => x.Id == gameSessionId);
@@ -31,8 +35,12 @@ public class GamePlayService : IGamePlayService
         if (game is null)
             throw new InvalidOperationException("Game session not found.");
 
-        if (game.Status == GameStatus.Finished || game.Status == GameStatus.Cancelled)
-            throw new InvalidOperationException("Game is already finished or cancelled.");
+        if (game.Status == GameStatus.Finished ||
+            game.Status == GameStatus.Cancelled)
+        {
+            throw new InvalidOperationException(
+                "Game is already finished or cancelled.");
+        }
 
         if (game.CurrentTurnId.HasValue)
         {
@@ -41,8 +49,11 @@ public class GamePlayService : IGamePlayService
                     x.Id == game.CurrentTurnId.Value &&
                     x.Status != TurnStatus.Completed);
 
-            //if (currentTurnIsStillActive)
-            //    throw new InvalidOperationException("There is already an active question.");
+            // لو عايز تمنع فتح سؤال جديد أثناء وجود سؤال نشط،
+            // رجع التحقق ده.
+            // if (currentTurnIsStillActive)
+            //     throw new InvalidOperationException(
+            //         "There is already an active question.");
         }
 
         var gameQuestion = await _dbContext.GameQuestions
@@ -56,7 +67,8 @@ public class GamePlayService : IGamePlayService
             throw new InvalidOperationException("Game question not found.");
 
         if (gameQuestion.IsUsed)
-            throw new InvalidOperationException("This question has already been used.");
+            throw new InvalidOperationException(
+                "This question has already been used.");
 
         var teams = await _dbContext.Teams
             .Where(x => x.GameSessionId == gameSessionId)
@@ -64,7 +76,8 @@ public class GamePlayService : IGamePlayService
             .ToListAsync();
 
         if (teams.Count != 2)
-            throw new InvalidOperationException("Game must have exactly two teams.");
+            throw new InvalidOperationException(
+                "Game must have exactly two teams.");
 
         var completedTurnsCount = await _dbContext.GameTurns
             .CountAsync(x =>
@@ -76,6 +89,8 @@ public class GamePlayService : IGamePlayService
             : teams.First(x => x.TurnOrder == 2);
 
         var secondTeam = teams.First(x => x.Id != mainTeam.Id);
+
+        var gameTurnId = Guid.NewGuid();
         var isDoublePointsUsed = false;
 
         if (request.UseDoublePoints)
@@ -86,31 +101,79 @@ public class GamePlayService : IGamePlayService
                     x.Type == HelpOptionType.DoublePoints);
 
             if (doublePointsOption is null)
-                throw new InvalidOperationException("Double points help option is not available for this team.");
+            {
+                throw new InvalidOperationException(
+                    "Double points help option is not available for this team.");
+            }
 
             if (doublePointsOption.IsUsed)
-                throw new InvalidOperationException("Double points help option has already been used.");
+            {
+                throw new InvalidOperationException(
+                    "Double points help option has already been used.");
+            }
 
             doublePointsOption.IsUsed = true;
             doublePointsOption.UsedAt = DateTime.UtcNow;
+            doublePointsOption.UsedInTurnId = gameTurnId;
 
             isDoublePointsUsed = true;
         }
 
+        var questionType = gameQuestion.Question.QuestionType;
         var basePoints = gameQuestion.Points;
-        var finalPoints = isDoublePointsUsed ? basePoints * 2 : basePoints;
+
+        var pointsBeforeDouble = basePoints;
+
+        var revealedCluesCount = 0;
+        var revealedClues = new List<string>();
+        var hasMoreClues = false;
+
+        int? clueAdjustedPoints = null;
+        string? closestAnswerUnit = null;
+
+        if (questionType == QuestionType.ThreeClues)
+        {
+            var metadata = GetThreeCluesMetadata(gameQuestion.Question);
+
+            // أول تلميح يظهر مباشرة عند فتح السؤال.
+            revealedCluesCount = 1;
+            revealedClues.Add(metadata.Clues[0]);
+
+            clueAdjustedPoints = metadata.PointsByClue[0];
+            pointsBeforeDouble = clueAdjustedPoints.Value;
+
+            hasMoreClues = metadata.Clues.Count > revealedCluesCount;
+        }
+        else if (questionType == QuestionType.ClosestAnswer)
+        {
+            var metadata = GetClosestAnswerMetadata(gameQuestion.Question);
+
+            // نرسل الوحدة فقط، ولا نرسل الرقم الصحيح.
+            closestAnswerUnit = metadata.Unit;
+        }
+
+        var finalPoints = isDoublePointsUsed
+            ? pointsBeforeDouble * 2
+            : pointsBeforeDouble;
 
         var gameTurn = new GameTurn
         {
-            Id = Guid.NewGuid(),
+            Id = gameTurnId,
             GameSessionId = gameSessionId,
             GameQuestionId = gameQuestion.Id,
             MainTeamId = mainTeam.Id,
             SecondTeamId = secondTeam.Id,
+
             Status = TurnStatus.MainTeamAnswering,
+
             IsDoublePointsUsed = isDoublePointsUsed,
+
             BasePoints = basePoints,
             FinalPoints = finalPoints,
+
+            RevealedCluesCount = revealedCluesCount,
+            ClueAdjustedPoints = clueAdjustedPoints,
+
             CreatedAt = DateTime.UtcNow,
             StartedAt = DateTime.UtcNow
         };
@@ -135,19 +198,35 @@ public class GamePlayService : IGamePlayService
             GameSessionId = game.Id,
             GameTurnId = gameTurn.Id,
             GameQuestionId = gameQuestion.Id,
+
             CategoryId = gameQuestion.CategoryId,
             CategoryName = gameQuestion.Category.Name,
+
             QuestionText = gameQuestion.Question.Text,
+            QuestionType = questionType.ToString(),
+
             Difficulty = gameQuestion.Difficulty.ToString(),
+
             BasePoints = gameTurn.BasePoints,
             FinalPoints = gameTurn.FinalPoints,
+
             IsDoublePointsUsed = gameTurn.IsDoublePointsUsed,
+
             MainTeamTimerSeconds = game.MainTeamTimerSeconds,
             SecondTeamTimerSeconds = game.SecondTeamTimerSeconds,
+
             Status = gameTurn.Status.ToString(),
+
             ImageUrl = gameQuestion.Question.ImageUrl,
             AudioUrl = gameQuestion.Question.AudioUrl,
             VideoUrl = gameQuestion.Question.VideoUrl,
+
+            RevealedCluesCount = gameTurn.RevealedCluesCount,
+            RevealedClues = revealedClues,
+            HasMoreClues = hasMoreClues,
+
+            ClosestAnswerUnit = closestAnswerUnit,
+
             MainTeam = new GameTurnTeamDto
             {
                 Id = mainTeam.Id,
@@ -155,6 +234,7 @@ public class GamePlayService : IGamePlayService
                 Score = mainTeam.Score,
                 TurnOrder = mainTeam.TurnOrder
             },
+
             SecondTeam = new GameTurnTeamDto
             {
                 Id = secondTeam.Id,
@@ -165,9 +245,86 @@ public class GamePlayService : IGamePlayService
         };
     }
 
+    public async Task<RevealNextClueResponse> RevealNextClueAsync(
+    Guid gameSessionId,
+    Guid gameTurnId)
+    {
+        var turn = await _dbContext.GameTurns
+            .Include(x => x.GameQuestion)
+            .ThenInclude(x => x.Question)
+            .FirstOrDefaultAsync(x =>
+                x.Id == gameTurnId &&
+                x.GameSessionId == gameSessionId);
+
+        if (turn is null)
+            throw new InvalidOperationException("Game turn not found.");
+
+        if (turn.Status == TurnStatus.Completed)
+            throw new InvalidOperationException(
+                "This turn is already completed.");
+
+        if (turn.Status == TurnStatus.AnswerRevealed)
+        {
+            throw new InvalidOperationException(
+                "You cannot reveal another clue after revealing the answer.");
+        }
+
+        var question = turn.GameQuestion.Question;
+
+        if (question.QuestionType != QuestionType.ThreeClues)
+        {
+            throw new InvalidOperationException(
+                "This question does not support clues.");
+        }
+
+        var metadata = GetThreeCluesMetadata(question);
+
+        if (turn.RevealedCluesCount <= 0)
+            turn.RevealedCluesCount = 1;
+
+        if (turn.RevealedCluesCount >= metadata.Clues.Count)
+        {
+            throw new InvalidOperationException(
+                "All clues have already been revealed.");
+        }
+
+        // لو RevealedCluesCount = 1، يبقى الـindex القادم هو 1.
+        var nextClueIndex = turn.RevealedCluesCount;
+
+        turn.RevealedCluesCount++;
+
+        var adjustedPoints = metadata.PointsByClue[nextClueIndex];
+
+        turn.ClueAdjustedPoints = adjustedPoints;
+
+        turn.FinalPoints = turn.IsDoublePointsUsed
+            ? adjustedPoints * 2
+            : adjustedPoints;
+
+        await _dbContext.SaveChangesAsync();
+
+        return new RevealNextClueResponse
+        {
+            GameTurnId = turn.Id,
+
+            RevealedCluesCount = turn.RevealedCluesCount,
+
+            RevealedClues = metadata.Clues
+                .Take(turn.RevealedCluesCount)
+                .ToList(),
+
+            ClueAdjustedPoints = adjustedPoints,
+
+            FinalPoints = turn.FinalPoints,
+
+            HasMoreClues =
+                turn.RevealedCluesCount < metadata.Clues.Count
+        };
+    }
+
     public async Task<RevealAnswerResponse> RevealAnswerAsync(
-        Guid gameSessionId,
-        Guid gameTurnId)
+    Guid gameSessionId,
+    Guid gameTurnId)
     {
         var game = await _dbContext.GameSessions
             .FirstOrDefaultAsync(x => x.Id == gameSessionId);
@@ -186,7 +343,21 @@ public class GamePlayService : IGamePlayService
             throw new InvalidOperationException("Game turn not found.");
 
         if (turn.Status == TurnStatus.Completed)
-            throw new InvalidOperationException("This turn is already completed.");
+            throw new InvalidOperationException(
+                "This turn is already completed.");
+
+        var question = turn.GameQuestion.Question;
+
+        decimal? numericAnswer = null;
+        string? unit = null;
+
+        if (question.QuestionType == QuestionType.ClosestAnswer)
+        {
+            var metadata = GetClosestAnswerMetadata(question);
+
+            numericAnswer = metadata.NumericAnswer;
+            unit = metadata.Unit;
+        }
 
         turn.Status = TurnStatus.AnswerRevealed;
         game.Status = GameStatus.ReviewingAnswer;
@@ -197,16 +368,21 @@ public class GamePlayService : IGamePlayService
         {
             GameTurnId = turn.Id,
             GameQuestionId = turn.GameQuestionId,
-            CorrectAnswer = turn.GameQuestion.Question.CorrectAnswer
+
+            CorrectAnswer = question.CorrectAnswer,
+            QuestionType = question.QuestionType.ToString(),
+
+            NumericAnswer = numericAnswer,
+            Unit = unit
         };
     }
-
     public async Task<AwardPointsResponse> AwardPointsAsync(
     Guid gameSessionId,
     Guid gameTurnId,
     AwardPointsRequest request)
     {
-        await using var transaction = await _dbContext.Database.BeginTransactionAsync();
+        await using var transaction =
+            await _dbContext.Database.BeginTransactionAsync();
 
         var game = await _dbContext.GameSessions
             .FirstOrDefaultAsync(x => x.Id == gameSessionId);
@@ -215,6 +391,8 @@ public class GamePlayService : IGamePlayService
             throw new InvalidOperationException("Game session not found.");
 
         var turn = await _dbContext.GameTurns
+            .Include(x => x.GameQuestion)
+            .ThenInclude(x => x.Question)
             .FirstOrDefaultAsync(x =>
                 x.Id == gameTurnId &&
                 x.GameSessionId == gameSessionId);
@@ -223,10 +401,14 @@ public class GamePlayService : IGamePlayService
             throw new InvalidOperationException("Game turn not found.");
 
         if (turn.Status == TurnStatus.Completed)
-            throw new InvalidOperationException("This turn is already completed.");
+            throw new InvalidOperationException(
+                "This turn is already completed.");
 
         if (turn.Status != TurnStatus.AnswerRevealed)
-            throw new InvalidOperationException("You must reveal the answer before awarding points.");
+        {
+            throw new InvalidOperationException(
+                "You must reveal the answer before awarding points.");
+        }
 
         var teams = await _dbContext.Teams
             .Where(x => x.GameSessionId == gameSessionId)
@@ -234,34 +416,123 @@ public class GamePlayService : IGamePlayService
             .ToListAsync();
 
         if (teams.Count != 2)
-            throw new InvalidOperationException("Game must have exactly two teams.");
+        {
+            throw new InvalidOperationException(
+                "Game must have exactly two teams.");
+        }
 
-        var mainTeam = teams.FirstOrDefault(x => x.Id == turn.MainTeamId);
-        var secondTeam = teams.FirstOrDefault(x => x.Id == turn.SecondTeamId);
+        var mainTeam = teams.FirstOrDefault(
+            x => x.Id == turn.MainTeamId);
+
+        var secondTeam = teams.FirstOrDefault(
+            x => x.Id == turn.SecondTeamId);
 
         if (mainTeam is null || secondTeam is null)
             throw new InvalidOperationException("Turn teams are invalid.");
 
-        Team? correctTeam = null;
+        var question = turn.GameQuestion.Question;
 
-        if (request.CorrectTeamId.HasValue)
+        var isClosestAnswer =
+            question.QuestionType == QuestionType.ClosestAnswer;
+
+        if (isClosestAnswer && turn.IsTrapUsed)
         {
-            correctTeam = teams.FirstOrDefault(x => x.Id == request.CorrectTeamId.Value);
-
-            if (correctTeam is null)
-                throw new InvalidOperationException("Correct team does not belong to this game.");
-
-            if (correctTeam.Id != turn.MainTeamId && correctTeam.Id != turn.SecondTeamId)
-                throw new InvalidOperationException("Correct team is not part of this turn.");
+            throw new InvalidOperationException(
+                "Trap cannot be used with closest-answer questions.");
         }
 
-        if (turn.IsTrapUsed)
-        {
-            var trapTargetTeamId = turn.TrapTargetTeamId ?? turn.SecondTeamId;
+        Team? correctTeam = null;
 
-            if (correctTeam is not null && correctTeam.Id != trapTargetTeamId)
+        var correctTeams = new List<Team>();
+
+        var isTie = false;
+
+        decimal? mainNumericAnswer = null;
+        decimal? secondNumericAnswer = null;
+        decimal? correctNumericAnswer = null;
+
+        /*
+         * ClosestAnswer:
+         * الفائز بيتحدد تلقائيًا من إجابتي الفريقين.
+         */
+        if (isClosestAnswer)
+        {
+            var metadata = GetClosestAnswerMetadata(question);
+
+            correctNumericAnswer = metadata.NumericAnswer;
+
+            mainNumericAnswer = ParseNumericAnswer(
+                request.MainTeamAnswerText,
+                mainTeam.Name);
+
+            secondNumericAnswer = ParseNumericAnswer(
+                request.SecondTeamAnswerText,
+                secondTeam.Name);
+
+            var mainDifference = Math.Abs(
+                mainNumericAnswer.Value -
+                correctNumericAnswer.Value);
+
+            var secondDifference = Math.Abs(
+                secondNumericAnswer.Value -
+                correctNumericAnswer.Value);
+
+            if (mainDifference < secondDifference)
             {
-                throw new InvalidOperationException("After using trap, only the opponent team can answer.");
+                correctTeam = mainTeam;
+                correctTeams.Add(mainTeam);
+            }
+            else if (secondDifference < mainDifference)
+            {
+                correctTeam = secondTeam;
+                correctTeams.Add(secondTeam);
+            }
+            else
+            {
+                isTie = true;
+
+                correctTeams.Add(mainTeam);
+                correctTeams.Add(secondTeam);
+            }
+        }
+        else
+        {
+            /*
+             * Standard وThreeClues:
+             * الـHost هو اللي بيحدد الفريق الصحيح.
+             */
+            if (request.CorrectTeamId.HasValue)
+            {
+                correctTeam = teams.FirstOrDefault(
+                    x => x.Id == request.CorrectTeamId.Value);
+
+                if (correctTeam is null)
+                {
+                    throw new InvalidOperationException(
+                        "Correct team does not belong to this game.");
+                }
+
+                if (correctTeam.Id != turn.MainTeamId &&
+                    correctTeam.Id != turn.SecondTeamId)
+                {
+                    throw new InvalidOperationException(
+                        "Correct team is not part of this turn.");
+                }
+
+                correctTeams.Add(correctTeam);
+            }
+
+            if (turn.IsTrapUsed)
+            {
+                var trapTargetTeamId =
+                    turn.TrapTargetTeamId ?? turn.SecondTeamId;
+
+                if (correctTeam is not null &&
+                    correctTeam.Id != trapTargetTeamId)
+                {
+                    throw new InvalidOperationException(
+                        "After using trap, only the opponent team can answer.");
+                }
             }
         }
 
@@ -276,24 +547,26 @@ public class GamePlayService : IGamePlayService
 
         var answerAttempts = new List<AnswerAttempt>
     {
-        new AnswerAttempt
+        new()
         {
             Id = Guid.NewGuid(),
             GameTurnId = turn.Id,
             TeamId = mainTeam.Id,
             AnswerText = request.MainTeamAnswerText?.Trim(),
-            IsCorrect = correctTeam?.Id == mainTeam.Id,
+            IsCorrect = correctTeams.Any(
+                x => x.Id == mainTeam.Id),
             IsSecondChance = false,
             SubmittedAt = DateTime.UtcNow
         },
-        new AnswerAttempt
+        new()
         {
             Id = Guid.NewGuid(),
             GameTurnId = turn.Id,
             TeamId = secondTeam.Id,
             AnswerText = request.SecondTeamAnswerText?.Trim(),
-            IsCorrect = correctTeam?.Id == secondTeam.Id,
-            IsSecondChance = true,
+            IsCorrect = correctTeams.Any(
+                x => x.Id == secondTeam.Id),
+            IsSecondChance = !isClosestAnswer,
             SubmittedAt = DateTime.UtcNow
         }
     };
@@ -302,75 +575,130 @@ public class GamePlayService : IGamePlayService
 
         var pointsAwarded = 0;
 
-        if (turn.IsTrapUsed)
+        /*
+         * حساب أقرب إجابة.
+         */
+        if (isClosestAnswer)
         {
-            var trapTargetTeamId = turn.TrapTargetTeamId ?? turn.SecondTeamId;
+            pointsAwarded = turn.FinalPoints;
 
-            var trapTargetTeam = teams.FirstOrDefault(x => x.Id == trapTargetTeamId);
+            foreach (var winningTeam in correctTeams)
+            {
+                winningTeam.Score += turn.FinalPoints;
+
+                var reason = isTie
+                    ? $"Closest answer tie: +{turn.FinalPoints}"
+                    : $"Closest answer: +{turn.FinalPoints}";
+
+                _dbContext.ScoreTransactions.Add(
+                    new ScoreTransaction
+                    {
+                        Id = Guid.NewGuid(),
+                        GameSessionId = gameSessionId,
+                        TeamId = winningTeam.Id,
+                        GameTurnId = turn.Id,
+                        Points = turn.FinalPoints,
+                        Reason = reason,
+                        CreatedAt = DateTime.UtcNow
+                    });
+            }
+        }
+
+        /*
+         * حساب الفخ.
+         */
+        else if (turn.IsTrapUsed)
+        {
+            var trapTargetTeamId =
+                turn.TrapTargetTeamId ?? turn.SecondTeamId;
+
+            var trapTargetTeam = teams.FirstOrDefault(
+                x => x.Id == trapTargetTeamId);
 
             if (trapTargetTeam is null)
-                throw new InvalidOperationException("Trap target team not found.");
+            {
+                throw new InvalidOperationException(
+                    "Trap target team not found.");
+            }
 
-            if (correctTeam is not null && correctTeam.Id == trapTargetTeam.Id)
+            if (correctTeam is not null &&
+                correctTeam.Id == trapTargetTeam.Id)
             {
                 pointsAwarded = turn.FinalPoints;
+
                 trapTargetTeam.Score += pointsAwarded;
 
-                var scoreTransaction = new ScoreTransaction
-                {
-                    Id = Guid.NewGuid(),
-                    GameSessionId = gameSessionId,
-                    TeamId = trapTargetTeam.Id,
-                    GameTurnId = turn.Id,
-                    Points = pointsAwarded,
-                    Reason = $"Trap answered correctly: +{pointsAwarded}",
-                    CreatedAt = DateTime.UtcNow
-                };
-
-                _dbContext.ScoreTransactions.Add(scoreTransaction);
+                _dbContext.ScoreTransactions.Add(
+                    new ScoreTransaction
+                    {
+                        Id = Guid.NewGuid(),
+                        GameSessionId = gameSessionId,
+                        TeamId = trapTargetTeam.Id,
+                        GameTurnId = turn.Id,
+                        Points = pointsAwarded,
+                        Reason =
+                            $"Trap answered correctly: +{pointsAwarded}",
+                        CreatedAt = DateTime.UtcNow
+                    });
             }
             else
             {
                 pointsAwarded = -turn.FinalPoints;
+
                 trapTargetTeam.Score += pointsAwarded;
 
-                var scoreTransaction = new ScoreTransaction
-                {
-                    Id = Guid.NewGuid(),
-                    GameSessionId = gameSessionId,
-                    TeamId = trapTargetTeam.Id,
-                    GameTurnId = turn.Id,
-                    Points = pointsAwarded,
-                    Reason = $"Trap failed answer: {pointsAwarded}",
-                    CreatedAt = DateTime.UtcNow
-                };
-
-                _dbContext.ScoreTransactions.Add(scoreTransaction);
+                _dbContext.ScoreTransactions.Add(
+                    new ScoreTransaction
+                    {
+                        Id = Guid.NewGuid(),
+                        GameSessionId = gameSessionId,
+                        TeamId = trapTargetTeam.Id,
+                        GameTurnId = turn.Id,
+                        Points = pointsAwarded,
+                        Reason = $"Trap failed answer: {pointsAwarded}",
+                        CreatedAt = DateTime.UtcNow
+                    });
             }
         }
-        else
+
+        /*
+         * السؤال العادي وThreeClues.
+         *
+         * ThreeClues بيستخدم turn.FinalPoints،
+         * وهي أصلًا اتعدلت حسب عدد التلميحات.
+         */
+        else if (correctTeam is not null)
         {
-            if (correctTeam is not null)
+            pointsAwarded = turn.FinalPoints;
+
+            correctTeam.Score += pointsAwarded;
+
+            string reason;
+
+            if (question.QuestionType == QuestionType.ThreeClues)
             {
-                pointsAwarded = turn.FinalPoints;
+                reason = turn.IsDoublePointsUsed
+                    ? $"Three clues correct answer with double points: +{pointsAwarded}"
+                    : $"Three clues correct answer after {turn.RevealedCluesCount} clue(s): +{pointsAwarded}";
+            }
+            else
+            {
+                reason = turn.IsDoublePointsUsed
+                    ? $"Correct answer with double points: +{pointsAwarded}"
+                    : $"Correct answer: +{pointsAwarded}";
+            }
 
-                correctTeam.Score += pointsAwarded;
-
-                var scoreTransaction = new ScoreTransaction
+            _dbContext.ScoreTransactions.Add(
+                new ScoreTransaction
                 {
                     Id = Guid.NewGuid(),
                     GameSessionId = gameSessionId,
                     TeamId = correctTeam.Id,
                     GameTurnId = turn.Id,
                     Points = pointsAwarded,
-                    Reason = turn.IsDoublePointsUsed
-                        ? $"Correct answer with double points: +{pointsAwarded}"
-                        : $"Correct answer: +{pointsAwarded}",
+                    Reason = reason,
                     CreatedAt = DateTime.UtcNow
-                };
-
-                _dbContext.ScoreTransactions.Add(scoreTransaction);
-            }
+                });
         }
 
         turn.Status = TurnStatus.Completed;
@@ -386,9 +714,22 @@ public class GamePlayService : IGamePlayService
         {
             GameSessionId = gameSessionId,
             GameTurnId = turn.Id,
-            CorrectTeamId = correctTeam?.Id,
+
+            QuestionType = question.QuestionType.ToString(),
+
+            CorrectTeamId = correctTeams.Count == 1
+                ? correctTeams[0].Id
+                : null,
+
+            CorrectTeamIds = correctTeams
+                .Select(x => x.Id)
+                .ToList(),
+
+            IsTie = isTie,
+
             PointsAwarded = pointsAwarded,
             Status = turn.Status.ToString(),
+
             Teams = teams
                 .OrderBy(x => x.TurnOrder)
                 .Select(x => new GameTurnTeamDto
@@ -401,7 +742,6 @@ public class GamePlayService : IGamePlayService
                 .ToList()
         };
     }
-
     public async Task<UseHelpOptionResponse> UseHelpOptionAsync(
      Guid gameSessionId,
      Guid gameTurnId,
@@ -422,12 +762,24 @@ public class GamePlayService : IGamePlayService
         await using var transaction = await _dbContext.Database.BeginTransactionAsync();
 
         var turn = await _dbContext.GameTurns
+            .Include(x => x.GameQuestion)
+            .ThenInclude(x => x.Question)
             .FirstOrDefaultAsync(x =>
                 x.Id == gameTurnId &&
                 x.GameSessionId == gameSessionId);
 
         if (turn is null)
             throw new InvalidOperationException("Game turn not found.");
+
+        if (turn.GameQuestion.Question.QuestionType ==
+                QuestionType.ClosestAnswer &&
+            helpType is HelpOptionType.TwoAnswers or
+                        HelpOptionType.StopPlayer or
+                        HelpOptionType.Trap)
+                {
+                    throw new InvalidOperationException(
+                        "This help option cannot be used with closest-answer questions.");
+                }
 
         if (turn.Status == TurnStatus.Completed)
             throw new InvalidOperationException("This turn is already completed.");
@@ -579,5 +931,177 @@ public class GamePlayService : IGamePlayService
             NewScore = team.Score,
             Teams = teams
         };
+    }
+
+    private static readonly JsonSerializerOptions MetadataJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
+    private static ThreeCluesMetadata GetThreeCluesMetadata(
+        Question question)
+    {
+        if (string.IsNullOrWhiteSpace(question.MetadataJson))
+        {
+            throw new InvalidOperationException(
+                $"Three-clues metadata is missing for question {question.Id}.");
+        }
+
+        ThreeCluesMetadata? metadata;
+
+        try
+        {
+            metadata = JsonSerializer.Deserialize<ThreeCluesMetadata>(
+                question.MetadataJson,
+                MetadataJsonOptions);
+        }
+        catch (JsonException)
+        {
+            throw new InvalidOperationException(
+                $"Three-clues metadata is invalid for question {question.Id}.");
+        }
+
+        if (metadata is null ||
+            metadata.Clues.Count == 0 ||
+            metadata.PointsByClue.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"Three-clues metadata is incomplete for question {question.Id}.");
+        }
+
+        if (metadata.Clues.Count != metadata.PointsByClue.Count)
+        {
+            throw new InvalidOperationException(
+                $"Clues and points count must match for question {question.Id}.");
+        }
+
+        if (metadata.Clues.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new InvalidOperationException(
+                $"Question {question.Id} contains an empty clue.");
+        }
+
+        if (metadata.PointsByClue.Any(x => x <= 0))
+        {
+            throw new InvalidOperationException(
+                $"Question {question.Id} contains invalid clue points.");
+        }
+
+        return metadata;
+    }
+
+    private static ClosestAnswerMetadata GetClosestAnswerMetadata(
+        Question question)
+    {
+        if (string.IsNullOrWhiteSpace(question.MetadataJson))
+        {
+            throw new InvalidOperationException(
+                $"Closest-answer metadata is missing for question {question.Id}.");
+        }
+
+        ClosestAnswerMetadata? metadata;
+
+        try
+        {
+            metadata = JsonSerializer.Deserialize<ClosestAnswerMetadata>(
+                question.MetadataJson,
+                MetadataJsonOptions);
+        }
+        catch (JsonException)
+        {
+            throw new InvalidOperationException(
+                $"Closest-answer metadata is invalid for question {question.Id}.");
+        }
+
+        if (metadata is null)
+        {
+            throw new InvalidOperationException(
+                $"Closest-answer metadata is incomplete for question {question.Id}.");
+        }
+
+        return metadata;
+    }
+
+    private static decimal ParseNumericAnswer(
+    string? answerText,
+    string teamName)
+    {
+        if (string.IsNullOrWhiteSpace(answerText))
+        {
+            throw new InvalidOperationException(
+                $"Numeric answer is required for team {teamName}.");
+        }
+
+        var normalized = ConvertArabicDigitsToEnglish(
+            answerText.Trim());
+
+        normalized = normalized
+            .Replace(" ", string.Empty)
+            .Replace("٬", string.Empty)
+            .Replace("٫", ".");
+
+        /*
+         * يدعم:
+         * 828
+         * 828.5
+         * ٨٢٨
+         * ٨٢٨٫٥
+         * 8,849
+         */
+        if (normalized.Contains(',') &&
+            !normalized.Contains('.'))
+        {
+            var commaIndex = normalized.LastIndexOf(',');
+
+            var digitsAfterComma =
+                normalized.Length - commaIndex - 1;
+
+            normalized = digitsAfterComma is 1 or 2
+                ? normalized.Replace(',', '.')
+                : normalized.Replace(",", string.Empty);
+        }
+        else
+        {
+            normalized = normalized.Replace(",", string.Empty);
+        }
+
+        if (!decimal.TryParse(
+                normalized,
+                NumberStyles.AllowLeadingSign |
+                NumberStyles.AllowDecimalPoint,
+                CultureInfo.InvariantCulture,
+                out var numericAnswer))
+        {
+            throw new InvalidOperationException(
+                $"Invalid numeric answer for team {teamName}.");
+        }
+
+        return numericAnswer;
+    }
+
+    private static string ConvertArabicDigitsToEnglish(
+        string value)
+    {
+        return value
+            .Replace('٠', '0')
+            .Replace('١', '1')
+            .Replace('٢', '2')
+            .Replace('٣', '3')
+            .Replace('٤', '4')
+            .Replace('٥', '5')
+            .Replace('٦', '6')
+            .Replace('٧', '7')
+            .Replace('٨', '8')
+            .Replace('٩', '9')
+            .Replace('۰', '0')
+            .Replace('۱', '1')
+            .Replace('۲', '2')
+            .Replace('۳', '3')
+            .Replace('۴', '4')
+            .Replace('۵', '5')
+            .Replace('۶', '6')
+            .Replace('۷', '7')
+            .Replace('۸', '8')
+            .Replace('۹', '9');
     }
 }

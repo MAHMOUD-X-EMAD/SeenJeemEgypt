@@ -37,4 +37,14 @@ public class SelectedQuestionResponse
     public string? AudioUrl { get; set; }
 
     public string? VideoUrl { get; set; }
+
+    public string QuestionType { get; set; } = string.Empty;
+
+    public int RevealedCluesCount { get; set; }
+
+    public List<string> RevealedClues { get; set; } = new();
+
+    public bool HasMoreClues { get; set; }
+
+    public string? ClosestAnswerUnit { get; set; }
 }

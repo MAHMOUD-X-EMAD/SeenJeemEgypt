@@ -25,4 +25,8 @@ public interface IGamePlayService
     Task<AdjustTeamScoreResponse> AdjustTeamScoreAsync(
     Guid gameSessionId,
     AdjustTeamScoreRequest request);
+
+    Task<RevealNextClueResponse> RevealNextClueAsync(
+    Guid gameSessionId,
+    Guid gameTurnId);
 }

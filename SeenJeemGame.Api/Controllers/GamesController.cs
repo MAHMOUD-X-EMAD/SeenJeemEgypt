@@ -83,6 +83,25 @@ public class GamesController : ControllerBase
         }
     }
 
+    [HttpPost("{gameSessionId:guid}/turns/{gameTurnId:guid}/reveal-next-clue")]
+    public async Task<ActionResult<RevealNextClueResponse>> RevealNextClue(
+    Guid gameSessionId,
+    Guid gameTurnId)
+    {
+        try
+        {
+            var response = await _gamePlayService.RevealNextClueAsync(
+                gameSessionId,
+                gameTurnId);
+
+            return Ok(response);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+    }
+
     [HttpPost("{gameSessionId:guid}/turns/{gameTurnId:guid}/award-points")]
     public async Task<ActionResult<AwardPointsResponse>> AwardPoints(
     Guid gameSessionId,

@@ -47,4 +47,8 @@ public class GameTurn
     public bool IsTrapUsed { get; set; }
 
     public Guid? TrapTargetTeamId { get; set; }
+
+    public int RevealedCluesCount { get; set; }
+
+    public int? ClueAdjustedPoints { get; set; }
 }

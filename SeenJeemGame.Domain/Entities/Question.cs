@@ -27,4 +27,9 @@ public class Question
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public Category Category { get; set; } = null!;
+
+    public QuestionType QuestionType { get; set; }
+    = QuestionType.Standard;
+
+    public string? MetadataJson { get; set; }
 }

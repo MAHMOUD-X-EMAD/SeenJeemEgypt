@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using SeenJeemGame.Domain.Entities;
+using SeenJeemGame.Domain.Enums;
 
 namespace SeenJeemGame.Infrastructure.Persistence;
 
@@ -195,6 +196,13 @@ public class AppDbContext : DbContext
                 .WithMany(x => x.Questions)
                 .HasForeignKey(x => x.CategoryId)
                 .OnDelete(DeleteBehavior.Restrict);
+
+            entity.Property(x => x.QuestionType)
+            .IsRequired()
+            .HasDefaultValue(QuestionType.Standard);
+
+            entity.Property(x => x.MetadataJson)
+                .HasColumnType("nvarchar(max)");
 
             entity.HasIndex(x => new { x.CategoryId, x.Difficulty });
         });
