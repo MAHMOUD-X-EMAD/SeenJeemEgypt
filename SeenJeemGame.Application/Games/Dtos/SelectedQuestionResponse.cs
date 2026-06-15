@@ -47,4 +47,10 @@ public class SelectedQuestionResponse
     public bool HasMoreClues { get; set; }
 
     public string? ClosestAnswerUnit { get; set; }
+
+    public int RevealedRankingItemsCount { get; set; }
+
+    public List<string> RevealedRankingItems { get; set; } = new();
+
+    public bool HasMoreRankingItems { get; set; }
 }

@@ -51,4 +51,12 @@ public class GameTurn
     public int RevealedCluesCount { get; set; }
 
     public int? ClueAdjustedPoints { get; set; }
+
+    public int RevealedRankingItemsCount { get; set; }
+
+    public string? BlindRankingRevealOrderJson { get; set; }
+
+    public int? MainTeamCorrectPositions { get; set; }
+
+    public int? SecondTeamCorrectPositions { get; set; }
 }

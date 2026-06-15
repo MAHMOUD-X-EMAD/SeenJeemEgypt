@@ -4,6 +4,8 @@ using SeenJeemGame.Application.Questions.Dtos;
 using SeenJeemGame.Domain.Entities;
 using SeenJeemGame.Domain.Enums;
 using SeenJeemGame.Infrastructure.Persistence;
+using SeenJeemGame.Application.Games.QuestionMetadata;
+using System.Text.Json;
 
 namespace SeenJeemGame.Infrastructure.Services.Questions;
 
@@ -32,6 +34,8 @@ public class QuestionService : IQuestionService
                 CorrectAnswer = x.CorrectAnswer,
                 Difficulty = x.Difficulty,
                 Points = x.Points,
+                QuestionType = x.QuestionType,
+                MetadataJson = x.MetadataJson,
                 ImageUrl = x.ImageUrl,
                 AudioUrl = x.AudioUrl,
                 VideoUrl = x.VideoUrl,
@@ -54,6 +58,8 @@ public class QuestionService : IQuestionService
                 CorrectAnswer = x.CorrectAnswer,
                 Difficulty = x.Difficulty,
                 Points = x.Points,
+                QuestionType = x.QuestionType,
+                MetadataJson = x.MetadataJson,
                 ImageUrl = x.ImageUrl,
                 AudioUrl = x.AudioUrl,
                 VideoUrl = x.VideoUrl,
@@ -78,6 +84,8 @@ public class QuestionService : IQuestionService
                 CorrectAnswer = x.CorrectAnswer,
                 Difficulty = x.Difficulty,
                 Points = x.Points,
+                QuestionType = x.QuestionType,
+                MetadataJson = x.MetadataJson,
                 ImageUrl = x.ImageUrl,
                 AudioUrl = x.AudioUrl,
                 VideoUrl = x.VideoUrl,
@@ -95,6 +103,7 @@ public class QuestionService : IQuestionService
             throw new InvalidOperationException("Category does not exist or is not active.");
 
         ValidateQuestion(request.Text, request.CorrectAnswer, request.Difficulty);
+        ValidateQuestionTypeAndMetadata(request.QuestionType, request.MetadataJson, request.Text);
 
         var question = new Question
         {
@@ -103,6 +112,8 @@ public class QuestionService : IQuestionService
             CorrectAnswer = request.CorrectAnswer.Trim(),
             Difficulty = request.Difficulty,
             Points = GetPointsByDifficulty(request.Difficulty),
+            QuestionType = request.QuestionType,
+            MetadataJson = NormalizeMetadataJson(request.MetadataJson),
             ImageUrl = request.ImageUrl?.Trim(),
             AudioUrl = request.AudioUrl?.Trim(),
             VideoUrl = request.VideoUrl?.Trim(),
@@ -127,6 +138,8 @@ public class QuestionService : IQuestionService
             CorrectAnswer = question.CorrectAnswer,
             Difficulty = question.Difficulty,
             Points = question.Points,
+            QuestionType = question.QuestionType,
+            MetadataJson = question.MetadataJson,
             ImageUrl = question.ImageUrl,
             AudioUrl = question.AudioUrl,
             VideoUrl = question.VideoUrl,
@@ -149,12 +162,15 @@ public class QuestionService : IQuestionService
             throw new InvalidOperationException("Category does not exist or is not active.");
 
         ValidateQuestion(request.Text, request.CorrectAnswer, request.Difficulty);
+        ValidateQuestionTypeAndMetadata(request.QuestionType, request.MetadataJson, request.Text);
 
         question.CategoryId = request.CategoryId;
         question.Text = request.Text.Trim();
         question.CorrectAnswer = request.CorrectAnswer.Trim();
         question.Difficulty = request.Difficulty;
         question.Points = GetPointsByDifficulty(request.Difficulty);
+        question.QuestionType = request.QuestionType;
+        question.MetadataJson = NormalizeMetadataJson(request.MetadataJson);
         question.ImageUrl = request.ImageUrl?.Trim();
         question.AudioUrl = request.AudioUrl?.Trim();
         question.VideoUrl = request.VideoUrl?.Trim();
@@ -206,6 +222,162 @@ public class QuestionService : IQuestionService
             throw new InvalidOperationException("Invalid question difficulty.");
     }
 
+
+    private static void ValidateQuestionTypeAndMetadata(
+        QuestionType questionType,
+        string? metadataJson,
+        string questionText)
+    {
+        if (!Enum.IsDefined(typeof(QuestionType), questionType))
+        {
+            throw new InvalidOperationException("Invalid question type.");
+        }
+
+        if (questionType == QuestionType.Standard)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(metadataJson))
+        {
+            throw new InvalidOperationException(
+                $"MetadataJson is required for question type {questionType}: {questionText}");
+        }
+
+        if (questionType == QuestionType.ThreeClues)
+        {
+            ValidateThreeCluesMetadata(metadataJson, questionText);
+            return;
+        }
+
+        if (questionType == QuestionType.ClosestAnswer)
+        {
+            ValidateClosestAnswerMetadata(metadataJson, questionText);
+            return;
+        }
+
+        if (questionType == QuestionType.BlindRanking)
+        {
+            ValidateBlindRankingMetadata(metadataJson, questionText);
+            return;
+        }
+    }
+
+    private static void ValidateThreeCluesMetadata(
+        string metadataJson,
+        string questionText)
+    {
+        ThreeCluesMetadata? metadata;
+
+        try
+        {
+            metadata = JsonSerializer.Deserialize<ThreeCluesMetadata>(
+                metadataJson,
+                MetadataJsonOptions);
+        }
+        catch (JsonException)
+        {
+            throw new InvalidOperationException(
+                $"Invalid ThreeClues MetadataJson for question: {questionText}");
+        }
+
+        if (metadata is null ||
+            metadata.Clues is null ||
+            metadata.PointsByClue is null ||
+            metadata.Clues.Count != 3 ||
+            metadata.PointsByClue.Count != 3)
+        {
+            throw new InvalidOperationException(
+                $"ThreeClues question must contain exactly 3 clues and 3 point values: {questionText}");
+        }
+
+        if (metadata.Clues.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new InvalidOperationException(
+                $"ThreeClues question contains an empty clue: {questionText}");
+        }
+
+        if (metadata.PointsByClue.Any(x => x <= 0))
+        {
+            throw new InvalidOperationException(
+                $"ThreeClues question contains invalid points: {questionText}");
+        }
+    }
+
+    private static void ValidateClosestAnswerMetadata(
+        string metadataJson,
+        string questionText)
+    {
+        ClosestAnswerMetadata? metadata;
+
+        try
+        {
+            metadata = JsonSerializer.Deserialize<ClosestAnswerMetadata>(
+                metadataJson,
+                MetadataJsonOptions);
+        }
+        catch (JsonException)
+        {
+            throw new InvalidOperationException(
+                $"Invalid ClosestAnswer MetadataJson for question: {questionText}");
+        }
+
+        if (metadata is null ||
+            string.IsNullOrWhiteSpace(metadata.Unit))
+        {
+            throw new InvalidOperationException(
+                $"ClosestAnswer question must contain NumericAnswer and Unit: {questionText}");
+        }
+    }
+
+    private static void ValidateBlindRankingMetadata(
+        string metadataJson,
+        string questionText)
+    {
+        BlindRankingMetadata? metadata;
+
+        try
+        {
+            metadata = JsonSerializer.Deserialize<BlindRankingMetadata>(
+                metadataJson,
+                MetadataJsonOptions);
+        }
+        catch (JsonException)
+        {
+            throw new InvalidOperationException(
+                $"Invalid BlindRanking MetadataJson for question: {questionText}");
+        }
+
+        var items = metadata?.Items?
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .ToList();
+
+        if (items is null || items.Count != 5)
+        {
+            throw new InvalidOperationException(
+                $"BlindRanking question must contain exactly 5 items: {questionText}");
+        }
+
+        if (items.Distinct(StringComparer.OrdinalIgnoreCase).Count() != 5)
+        {
+            throw new InvalidOperationException(
+                $"BlindRanking question items must be unique: {questionText}");
+        }
+    }
+
+    private static string? NormalizeMetadataJson(string? metadataJson)
+    {
+        return string.IsNullOrWhiteSpace(metadataJson)
+            ? null
+            : metadataJson.Trim();
+    }
+
+    private static readonly JsonSerializerOptions MetadataJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     public async Task<BulkCreateQuestionsResponse> BulkCreateAsync(List<CreateQuestionRequest> requests)
     {
         var response = new BulkCreateQuestionsResponse
@@ -228,6 +400,8 @@ public class QuestionService : IQuestionService
         var validCategoryIdsSet = validCategoryIds.ToHashSet();
 
         var existingQuestions = await _dbContext.Questions
+            .AsNoTracking()
+            .Where(x => x.IsActive)
             .Select(x => new
             {
                 x.CategoryId,
@@ -278,6 +452,25 @@ public class QuestionService : IQuestionService
                 continue;
             }
 
+            if (!Enum.IsDefined(typeof(QuestionType), request.QuestionType))
+            {
+                response.Errors.Add($"Row {rowNumber}: Invalid question type value.");
+                continue;
+            }
+
+            try
+            {
+                ValidateQuestionTypeAndMetadata(
+                    request.QuestionType,
+                    request.MetadataJson,
+                    request.Text);
+            }
+            catch (InvalidOperationException ex)
+            {
+                response.Errors.Add($"Row {rowNumber}: {ex.Message}");
+                continue;
+            }
+
             var normalizedText = request.Text.Trim().ToLower();
             var duplicateKey = $"{request.CategoryId}|{normalizedText}";
 
@@ -296,6 +489,8 @@ public class QuestionService : IQuestionService
                 CorrectAnswer = request.CorrectAnswer.Trim(),
                 Difficulty = request.Difficulty,
                 Points = GetPointsByDifficulty(request.Difficulty),
+                QuestionType = request.QuestionType,
+                MetadataJson = NormalizeMetadataJson(request.MetadataJson),
                 ImageUrl = request.ImageUrl?.Trim(),
                 AudioUrl = request.AudioUrl?.Trim(),
                 VideoUrl = request.VideoUrl?.Trim(),

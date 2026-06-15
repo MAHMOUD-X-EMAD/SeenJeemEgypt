@@ -8,6 +8,7 @@ namespace SeenJeemGame.Domain.Enums
     {
         Standard = 1,
         ThreeClues = 2,
-        ClosestAnswer = 3
+        ClosestAnswer = 3,
+        BlindRanking = 4
     }
 }

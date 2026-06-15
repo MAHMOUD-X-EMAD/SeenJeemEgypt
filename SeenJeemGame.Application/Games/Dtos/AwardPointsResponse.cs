@@ -19,4 +19,8 @@ public class AwardPointsResponse
     public bool IsTie { get; set; }
 
     public List<Guid> CorrectTeamIds { get; set; } = new();
+
+    public int? MainTeamCorrectPositions { get; set; }
+
+    public int? SecondTeamCorrectPositions { get; set; }
 }

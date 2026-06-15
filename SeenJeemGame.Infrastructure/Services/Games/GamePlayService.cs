@@ -2,6 +2,7 @@
 using SeenJeemGame.Application.Games;
 using SeenJeemGame.Application.Games.Dtos;
 using SeenJeemGame.Application.Games.QuestionMetadata;
+using SeenJeemGame.Application.Games.Responses;
 using SeenJeemGame.Domain.Entities;
 using SeenJeemGame.Domain.Enums;
 using SeenJeemGame.Infrastructure.Persistence;
@@ -91,7 +92,15 @@ public class GamePlayService : IGamePlayService
         var secondTeam = teams.First(x => x.Id != mainTeam.Id);
 
         var gameTurnId = Guid.NewGuid();
+        var questionType = gameQuestion.Question.QuestionType;
         var isDoublePointsUsed = false;
+
+        if (request.UseDoublePoints &&
+            questionType == QuestionType.BlindRanking)
+        {
+            throw new InvalidOperationException(
+                "Double points cannot be used with blind-ranking questions.");
+        }
 
         if (request.UseDoublePoints)
         {
@@ -119,7 +128,6 @@ public class GamePlayService : IGamePlayService
             isDoublePointsUsed = true;
         }
 
-        var questionType = gameQuestion.Question.QuestionType;
         var basePoints = gameQuestion.Points;
 
         var pointsBeforeDouble = basePoints;
@@ -130,6 +138,11 @@ public class GamePlayService : IGamePlayService
 
         int? clueAdjustedPoints = null;
         string? closestAnswerUnit = null;
+
+        var revealedRankingItemsCount = 0;
+        var revealedRankingItems = new List<string>();
+        var hasMoreRankingItems = false;
+        string? blindRankingRevealOrderJson = null;
 
         if (questionType == QuestionType.ThreeClues)
         {
@@ -150,6 +163,30 @@ public class GamePlayService : IGamePlayService
 
             // نرسل الوحدة فقط، ولا نرسل الرقم الصحيح.
             closestAnswerUnit = metadata.Unit;
+        }
+        else if (questionType == QuestionType.BlindRanking)
+        {
+            var metadata = GetBlindRankingMetadata(gameQuestion.Question);
+
+            // نخزن ترتيب الظهور مرة واحدة فقط داخل الدور حتى لا يتغير بعد Refresh.
+            var revealOrder = metadata.Items
+                .OrderBy(_ => Guid.NewGuid())
+                .ToList();
+
+            blindRankingRevealOrderJson =
+                JsonSerializer.Serialize(revealOrder);
+
+            // أول عنصر يظهر مباشرة عند فتح السؤال.
+            revealedRankingItemsCount = 1;
+            revealedRankingItems = revealOrder
+                .Take(revealedRankingItemsCount)
+                .ToList();
+
+            hasMoreRankingItems =
+                revealedRankingItemsCount < revealOrder.Count;
+
+            // أعلى جائزة لهذا النوع ثابتة 600.
+            pointsBeforeDouble = 600;
         }
 
         var finalPoints = isDoublePointsUsed
@@ -173,6 +210,12 @@ public class GamePlayService : IGamePlayService
 
             RevealedCluesCount = revealedCluesCount,
             ClueAdjustedPoints = clueAdjustedPoints,
+
+            RevealedRankingItemsCount =
+                revealedRankingItemsCount,
+
+            BlindRankingRevealOrderJson =
+                blindRankingRevealOrderJson,
 
             CreatedAt = DateTime.UtcNow,
             StartedAt = DateTime.UtcNow
@@ -226,6 +269,15 @@ public class GamePlayService : IGamePlayService
             HasMoreClues = hasMoreClues,
 
             ClosestAnswerUnit = closestAnswerUnit,
+
+            RevealedRankingItemsCount =
+                gameTurn.RevealedRankingItemsCount,
+
+            RevealedRankingItems =
+                revealedRankingItems,
+
+            HasMoreRankingItems =
+                hasMoreRankingItems,
 
             MainTeam = new GameTurnTeamDto
             {
@@ -322,6 +374,78 @@ public class GamePlayService : IGamePlayService
         };
     }
 
+    public async Task<RevealNextRankingItemResponse>
+        RevealNextRankingItemAsync(
+            Guid gameSessionId,
+            Guid gameTurnId)
+    {
+        var turn = await _dbContext.GameTurns
+            .Include(x => x.GameQuestion)
+            .ThenInclude(x => x.Question)
+            .FirstOrDefaultAsync(x =>
+                x.Id == gameTurnId &&
+                x.GameSessionId == gameSessionId);
+
+        if (turn is null)
+            throw new InvalidOperationException("Game turn not found.");
+
+        if (turn.Status == TurnStatus.Completed)
+        {
+            throw new InvalidOperationException(
+                "This turn is already completed.");
+        }
+
+        if (turn.Status == TurnStatus.AnswerRevealed)
+        {
+            throw new InvalidOperationException(
+                "You cannot reveal another ranking item after revealing the answer.");
+        }
+
+        var question = turn.GameQuestion.Question;
+
+        if (question.QuestionType != QuestionType.BlindRanking)
+        {
+            throw new InvalidOperationException(
+                "This question is not a blind-ranking question.");
+        }
+
+        var revealOrder = GetBlindRankingRevealOrder(turn);
+
+        if (turn.RevealedRankingItemsCount <= 0)
+            turn.RevealedRankingItemsCount = 1;
+
+        if (turn.RevealedRankingItemsCount >= revealOrder.Count)
+        {
+            throw new InvalidOperationException(
+                "All ranking items have already been revealed.");
+        }
+
+        turn.RevealedRankingItemsCount++;
+
+        await _dbContext.SaveChangesAsync();
+
+        var revealedItems = revealOrder
+            .Take(turn.RevealedRankingItemsCount)
+            .ToList();
+
+        return new RevealNextRankingItemResponse
+        {
+            GameTurnId = turn.Id,
+
+            RevealedRankingItemsCount =
+                turn.RevealedRankingItemsCount,
+
+            RevealedRankingItems =
+                revealedItems,
+
+            CurrentItem =
+                revealedItems.Last(),
+
+            HasMoreRankingItems =
+                turn.RevealedRankingItemsCount < revealOrder.Count
+        };
+    }
+
     public async Task<RevealAnswerResponse> RevealAnswerAsync(
     Guid gameSessionId,
     Guid gameTurnId)
@@ -347,6 +471,17 @@ public class GamePlayService : IGamePlayService
                 "This turn is already completed.");
 
         var question = turn.GameQuestion.Question;
+
+        if (question.QuestionType == QuestionType.BlindRanking)
+        {
+            var revealOrder = GetBlindRankingRevealOrder(turn);
+
+            if (turn.RevealedRankingItemsCount < revealOrder.Count)
+            {
+                throw new InvalidOperationException(
+                    "All ranking items must be revealed before revealing the answer.");
+            }
+        }
 
         decimal? numericAnswer = null;
         string? unit = null;
@@ -435,6 +570,9 @@ public class GamePlayService : IGamePlayService
         var isClosestAnswer =
             question.QuestionType == QuestionType.ClosestAnswer;
 
+        var isBlindRanking =
+            question.QuestionType == QuestionType.BlindRanking;
+
         if (isClosestAnswer && turn.IsTrapUsed)
         {
             throw new InvalidOperationException(
@@ -451,11 +589,61 @@ public class GamePlayService : IGamePlayService
         decimal? secondNumericAnswer = null;
         decimal? correctNumericAnswer = null;
 
+        var blindRankingPoints = 0;
+
+        /*
+         * BlindRanking:
+         * الـHost يحدد 5 أو 3 أو 2 فأقل للفريق الأساسي.
+         * المنافس يتم تقييمه فقط إذا حصل الفريق الأساسي على صفر.
+         */
+        if (isBlindRanking)
+        {
+            var mainCorrectPositions =
+                request.MainTeamCorrectPositions
+                ?? throw new InvalidOperationException(
+                    "Main team ranking result is required.");
+
+            var mainPoints =
+                GetBlindRankingPoints(mainCorrectPositions);
+
+            turn.MainTeamCorrectPositions =
+                mainCorrectPositions;
+
+            turn.SecondTeamCorrectPositions = null;
+
+            if (mainPoints > 0)
+            {
+                correctTeam = mainTeam;
+                correctTeams.Add(mainTeam);
+                blindRankingPoints = mainPoints;
+            }
+            else
+            {
+                var secondCorrectPositions =
+                    request.SecondTeamCorrectPositions
+                    ?? throw new InvalidOperationException(
+                        "Second team ranking result is required because the main team scored zero.");
+
+                var secondPoints =
+                    GetBlindRankingPoints(secondCorrectPositions);
+
+                turn.SecondTeamCorrectPositions =
+                    secondCorrectPositions;
+
+                if (secondPoints > 0)
+                {
+                    correctTeam = secondTeam;
+                    correctTeams.Add(secondTeam);
+                    blindRankingPoints = secondPoints;
+                }
+            }
+        }
+
         /*
          * ClosestAnswer:
          * الفائز بيتحدد تلقائيًا من إجابتي الفريقين.
          */
-        if (isClosestAnswer)
+        else if (isClosestAnswer)
         {
             var metadata = GetClosestAnswerMetadata(question);
 
@@ -566,7 +754,12 @@ public class GamePlayService : IGamePlayService
             AnswerText = request.SecondTeamAnswerText?.Trim(),
             IsCorrect = correctTeams.Any(
                 x => x.Id == secondTeam.Id),
-            IsSecondChance = !isClosestAnswer,
+            IsSecondChance =
+                !isClosestAnswer &&
+                (!isBlindRanking ||
+                 (turn.MainTeamCorrectPositions.HasValue &&
+                  GetBlindRankingPoints(
+                      turn.MainTeamCorrectPositions.Value) == 0)),
             SubmittedAt = DateTime.UtcNow
         }
     };
@@ -576,9 +769,41 @@ public class GamePlayService : IGamePlayService
         var pointsAwarded = 0;
 
         /*
+         * حساب الترتيب الأعمى.
+         */
+        if (isBlindRanking)
+        {
+            pointsAwarded = blindRankingPoints;
+
+            if (correctTeam is not null &&
+                pointsAwarded > 0)
+            {
+                correctTeam.Score += pointsAwarded;
+
+                var correctPositions =
+                    correctTeam.Id == mainTeam.Id
+                        ? turn.MainTeamCorrectPositions
+                        : turn.SecondTeamCorrectPositions;
+
+                _dbContext.ScoreTransactions.Add(
+                    new ScoreTransaction
+                    {
+                        Id = Guid.NewGuid(),
+                        GameSessionId = gameSessionId,
+                        TeamId = correctTeam.Id,
+                        GameTurnId = turn.Id,
+                        Points = pointsAwarded,
+                        Reason =
+                            $"Blind ranking ({correctPositions} correct positions): +{pointsAwarded}",
+                        CreatedAt = DateTime.UtcNow
+                    });
+            }
+        }
+
+        /*
          * حساب أقرب إجابة.
          */
-        if (isClosestAnswer)
+        else if (isClosestAnswer)
         {
             pointsAwarded = turn.FinalPoints;
 
@@ -727,6 +952,12 @@ public class GamePlayService : IGamePlayService
 
             IsTie = isTie,
 
+            MainTeamCorrectPositions =
+                turn.MainTeamCorrectPositions,
+
+            SecondTeamCorrectPositions =
+                turn.SecondTeamCorrectPositions,
+
             PointsAwarded = pointsAwarded,
             Status = turn.Status.ToString(),
 
@@ -772,14 +1003,21 @@ public class GamePlayService : IGamePlayService
             throw new InvalidOperationException("Game turn not found.");
 
         if (turn.GameQuestion.Question.QuestionType ==
+                QuestionType.BlindRanking)
+        {
+            throw new InvalidOperationException(
+                "Help options cannot be used with blind-ranking questions.");
+        }
+
+        if (turn.GameQuestion.Question.QuestionType ==
                 QuestionType.ClosestAnswer &&
             helpType is HelpOptionType.TwoAnswers or
                         HelpOptionType.StopPlayer or
                         HelpOptionType.Trap)
-                {
-                    throw new InvalidOperationException(
-                        "This help option cannot be used with closest-answer questions.");
-                }
+        {
+            throw new InvalidOperationException(
+                "This help option cannot be used with closest-answer questions.");
+        }
 
         if (turn.Status == TurnStatus.Completed)
             throw new InvalidOperationException("This turn is already completed.");
@@ -1020,6 +1258,104 @@ public class GamePlayService : IGamePlayService
         }
 
         return metadata;
+    }
+
+    private static BlindRankingMetadata GetBlindRankingMetadata(
+        Question question)
+    {
+        if (string.IsNullOrWhiteSpace(question.MetadataJson))
+        {
+            throw new InvalidOperationException(
+                $"Blind-ranking metadata is missing for question {question.Id}.");
+        }
+
+        BlindRankingMetadata? metadata;
+
+        try
+        {
+            metadata = JsonSerializer.Deserialize<BlindRankingMetadata>(
+                question.MetadataJson,
+                MetadataJsonOptions);
+        }
+        catch (JsonException)
+        {
+            throw new InvalidOperationException(
+                $"Blind-ranking metadata is invalid for question {question.Id}.");
+        }
+
+        if (metadata?.Items is null)
+        {
+            throw new InvalidOperationException(
+                $"Blind-ranking metadata is incomplete for question {question.Id}.");
+        }
+
+        var items = metadata.Items
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .ToList();
+
+        if (items.Count != 5)
+        {
+            throw new InvalidOperationException(
+                $"Blind-ranking question {question.Id} must contain exactly 5 items.");
+        }
+
+        if (items.Distinct(
+                StringComparer.OrdinalIgnoreCase).Count() != 5)
+        {
+            throw new InvalidOperationException(
+                $"Blind-ranking question {question.Id} must contain 5 unique items.");
+        }
+
+        metadata.Items = items;
+
+        return metadata;
+    }
+
+    private static List<string> GetBlindRankingRevealOrder(
+        GameTurn turn)
+    {
+        if (string.IsNullOrWhiteSpace(
+                turn.BlindRankingRevealOrderJson))
+        {
+            throw new InvalidOperationException(
+                "Blind-ranking reveal order is missing.");
+        }
+
+        List<string>? items;
+
+        try
+        {
+            items = JsonSerializer.Deserialize<List<string>>(
+                turn.BlindRankingRevealOrderJson,
+                MetadataJsonOptions);
+        }
+        catch (JsonException)
+        {
+            throw new InvalidOperationException(
+                "Blind-ranking reveal order is invalid.");
+        }
+
+        if (items is null || items.Count != 5)
+        {
+            throw new InvalidOperationException(
+                "Blind-ranking reveal order must contain exactly 5 items.");
+        }
+
+        return items;
+    }
+
+    private static int GetBlindRankingPoints(
+        int correctPositions)
+    {
+        return correctPositions switch
+        {
+            5 => 600,
+            3 => 200,
+            >= 0 and <= 2 => 0,
+            _ => throw new InvalidOperationException(
+                "Blind-ranking result must be 5, 3, or 2-or-less.")
+        };
     }
 
     private static decimal ParseNumericAnswer(

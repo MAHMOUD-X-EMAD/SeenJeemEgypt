@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using SeenJeemGame.Application.Games;
 using SeenJeemGame.Application.Games.Dtos;
+using SeenJeemGame.Application.Games.Responses;
 
 namespace SeenJeemGame.Api.Controllers;
 
@@ -156,6 +157,28 @@ public class GamesController : ControllerBase
                 request);
 
             return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+    }
+
+    [HttpPost(
+    "{gameSessionId:guid}/turns/{gameTurnId:guid}/reveal-next-ranking-item")]
+    public async Task<ActionResult<RevealNextRankingItemResponse>>
+    RevealNextRankingItem(
+        Guid gameSessionId,
+        Guid gameTurnId)
+    {
+        try
+        {
+            var response =
+                await _gamePlayService.RevealNextRankingItemAsync(
+                    gameSessionId,
+                    gameTurnId);
+
+            return Ok(response);
         }
         catch (InvalidOperationException ex)
         {

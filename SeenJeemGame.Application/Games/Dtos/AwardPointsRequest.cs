@@ -7,4 +7,8 @@ public class AwardPointsRequest
     public string? MainTeamAnswerText { get; set; }
 
     public string? SecondTeamAnswerText { get; set; }
+
+    public int? MainTeamCorrectPositions { get; set; }
+
+    public int? SecondTeamCorrectPositions { get; set; }
 }

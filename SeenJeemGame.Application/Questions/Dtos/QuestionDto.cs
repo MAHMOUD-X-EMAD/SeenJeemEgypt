@@ -27,4 +27,8 @@ public class QuestionDto
     public string? VideoUrl { get; set; }
 
     public bool IsActive { get; set; }
+
+    public QuestionType QuestionType { get; set; }
+
+    public string? MetadataJson { get; set; }
 }

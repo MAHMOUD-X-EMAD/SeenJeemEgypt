@@ -19,4 +19,9 @@ public class UpdateQuestionRequest
     public string? VideoUrl { get; set; }
 
     public bool IsActive { get; set; } = true;
+
+    public QuestionType QuestionType { get; set; }
+    = QuestionType.Standard;
+
+    public string? MetadataJson { get; set; }
 }

@@ -1,4 +1,5 @@
 ﻿using SeenJeemGame.Application.Games.Dtos;
+using SeenJeemGame.Application.Games.Responses;
 
 namespace SeenJeemGame.Application.Games;
 
@@ -27,6 +28,10 @@ public interface IGamePlayService
     AdjustTeamScoreRequest request);
 
     Task<RevealNextClueResponse> RevealNextClueAsync(
+    Guid gameSessionId,
+    Guid gameTurnId);
+
+    Task<RevealNextRankingItemResponse> RevealNextRankingItemAsync(
     Guid gameSessionId,
     Guid gameTurnId);
 }

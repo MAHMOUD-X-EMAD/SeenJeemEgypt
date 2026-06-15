@@ -371,6 +371,9 @@ public class AppDbContext : DbContext
 
             entity.HasIndex(x => x.GameQuestionId)
                 .IsUnique();
+
+            entity.Property(x => x.BlindRankingRevealOrderJson)
+                .HasColumnType("nvarchar(max)");
         });
     }
 

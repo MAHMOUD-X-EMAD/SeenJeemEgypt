@@ -17,4 +17,9 @@ public class CreateQuestionRequest
     public string? AudioUrl { get; set; }
 
     public string? VideoUrl { get; set; }
+
+    public QuestionType QuestionType { get; set; }
+    = QuestionType.Standard;
+
+    public string? MetadataJson { get; set; }
 }
