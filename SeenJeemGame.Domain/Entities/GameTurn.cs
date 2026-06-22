@@ -59,4 +59,12 @@ public class GameTurn
     public int? MainTeamCorrectPositions { get; set; }
 
     public int? SecondTeamCorrectPositions { get; set; }
+
+    public int? MainTeamLockedClueNumber { get; set; }
+
+    public int? MainTeamLockedPoints { get; set; }
+
+    public int? SecondTeamLockedClueNumber { get; set; }
+
+    public int? SecondTeamLockedPoints { get; set; }
 }

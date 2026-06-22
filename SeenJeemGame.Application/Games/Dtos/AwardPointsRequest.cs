@@ -11,4 +11,8 @@ public class AwardPointsRequest
     public int? MainTeamCorrectPositions { get; set; }
 
     public int? SecondTeamCorrectPositions { get; set; }
+
+    public bool? MainTeamThreeCluesIsCorrect { get; set; }
+
+    public bool? SecondTeamThreeCluesIsCorrect { get; set; }
 }

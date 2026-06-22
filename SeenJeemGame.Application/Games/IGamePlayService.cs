@@ -34,4 +34,10 @@ public interface IGamePlayService
     Task<RevealNextRankingItemResponse> RevealNextRankingItemAsync(
     Guid gameSessionId,
     Guid gameTurnId);
+
+    Task<LockThreeCluesAnswerResponse>
+    LockThreeCluesAnswerAsync(
+        Guid gameSessionId,
+        Guid gameTurnId,
+        LockThreeCluesAnswerRequest request);
 }

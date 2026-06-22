@@ -23,4 +23,8 @@ public class AwardPointsResponse
     public int? MainTeamCorrectPositions { get; set; }
 
     public int? SecondTeamCorrectPositions { get; set; }
+
+    public int MainTeamPointsAwarded { get; set; }
+
+    public int SecondTeamPointsAwarded { get; set; }
 }

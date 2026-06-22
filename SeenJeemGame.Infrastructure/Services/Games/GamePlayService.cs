@@ -96,10 +96,11 @@ public class GamePlayService : IGamePlayService
         var isDoublePointsUsed = false;
 
         if (request.UseDoublePoints &&
-            questionType == QuestionType.BlindRanking)
+            questionType is QuestionType.ThreeClues or
+                QuestionType.BlindRanking)
         {
             throw new InvalidOperationException(
-                "Double points cannot be used with blind-ranking questions.");
+                "Double points cannot be used with shared-answer question types.");
         }
 
         if (request.UseDoublePoints)
@@ -268,6 +269,18 @@ public class GamePlayService : IGamePlayService
             RevealedClues = revealedClues,
             HasMoreClues = hasMoreClues,
 
+            MainTeamLockedClueNumber =
+                gameTurn.MainTeamLockedClueNumber,
+
+            MainTeamLockedPoints =
+                gameTurn.MainTeamLockedPoints,
+
+            SecondTeamLockedClueNumber =
+                gameTurn.SecondTeamLockedClueNumber,
+
+            SecondTeamLockedPoints =
+                gameTurn.SecondTeamLockedPoints,
+
             ClosestAnswerUnit = closestAnswerUnit,
 
             RevealedRankingItemsCount =
@@ -331,6 +344,13 @@ public class GamePlayService : IGamePlayService
 
         var metadata = GetThreeCluesMetadata(question);
 
+        if (turn.MainTeamLockedPoints.HasValue &&
+            turn.SecondTeamLockedPoints.HasValue)
+        {
+            throw new InvalidOperationException(
+                "Both teams have already locked their answers.");
+        }
+
         if (turn.RevealedCluesCount <= 0)
             turn.RevealedCluesCount = 1;
 
@@ -371,6 +391,122 @@ public class GamePlayService : IGamePlayService
 
             HasMoreClues =
                 turn.RevealedCluesCount < metadata.Clues.Count
+        };
+    }
+
+    public async Task<LockThreeCluesAnswerResponse>
+        LockThreeCluesAnswerAsync(
+            Guid gameSessionId,
+            Guid gameTurnId,
+            LockThreeCluesAnswerRequest request)
+    {
+        if (request.TeamId == Guid.Empty)
+        {
+            throw new InvalidOperationException(
+                "Team id is required.");
+        }
+
+        var turn = await _dbContext.GameTurns
+            .Include(x => x.GameQuestion)
+            .ThenInclude(x => x.Question)
+            .FirstOrDefaultAsync(x =>
+                x.Id == gameTurnId &&
+                x.GameSessionId == gameSessionId);
+
+        if (turn is null)
+            throw new InvalidOperationException("Game turn not found.");
+
+        if (turn.Status == TurnStatus.Completed)
+        {
+            throw new InvalidOperationException(
+                "This turn is already completed.");
+        }
+
+        if (turn.Status == TurnStatus.AnswerRevealed)
+        {
+            throw new InvalidOperationException(
+                "You cannot lock an answer after revealing the answer.");
+        }
+
+        var question = turn.GameQuestion.Question;
+
+        if (question.QuestionType != QuestionType.ThreeClues)
+        {
+            throw new InvalidOperationException(
+                "This question is not a three-clues question.");
+        }
+
+        if (request.TeamId != turn.MainTeamId &&
+            request.TeamId != turn.SecondTeamId)
+        {
+            throw new InvalidOperationException(
+                "Team is not part of this turn.");
+        }
+
+        var metadata = GetThreeCluesMetadata(question);
+
+        if (turn.RevealedCluesCount <= 0 ||
+            turn.RevealedCluesCount > metadata.Clues.Count)
+        {
+            throw new InvalidOperationException(
+                "The current clue state is invalid.");
+        }
+
+        var clueNumber = turn.RevealedCluesCount;
+        var cluePoints =
+            metadata.PointsByClue[clueNumber - 1];
+
+        var lockedPoints = turn.IsDoublePointsUsed
+            ? cluePoints * 2
+            : cluePoints;
+
+        if (request.TeamId == turn.MainTeamId)
+        {
+            if (turn.MainTeamLockedPoints.HasValue)
+            {
+                throw new InvalidOperationException(
+                    "The main team has already locked its answer.");
+            }
+
+            turn.MainTeamLockedClueNumber = clueNumber;
+            turn.MainTeamLockedPoints = lockedPoints;
+        }
+        else
+        {
+            if (turn.SecondTeamLockedPoints.HasValue)
+            {
+                throw new InvalidOperationException(
+                    "The second team has already locked its answer.");
+            }
+
+            turn.SecondTeamLockedClueNumber = clueNumber;
+            turn.SecondTeamLockedPoints = lockedPoints;
+        }
+
+        await _dbContext.SaveChangesAsync();
+
+        return new LockThreeCluesAnswerResponse
+        {
+            GameTurnId = turn.Id,
+            TeamId = request.TeamId,
+            LockedClueNumber = clueNumber,
+            LockedPoints = lockedPoints,
+
+            MainTeamLockedClueNumber =
+                turn.MainTeamLockedClueNumber,
+
+            MainTeamLockedPoints =
+                turn.MainTeamLockedPoints,
+
+            SecondTeamLockedClueNumber =
+                turn.SecondTeamLockedClueNumber,
+
+            SecondTeamLockedPoints =
+                turn.SecondTeamLockedPoints,
+
+            BothTeamsLocked =
+                turn.MainTeamLockedPoints.HasValue &&
+                turn.SecondTeamLockedPoints.HasValue
         };
     }
 
@@ -472,6 +608,24 @@ public class GamePlayService : IGamePlayService
 
         var question = turn.GameQuestion.Question;
 
+        if (question.QuestionType == QuestionType.ThreeClues)
+        {
+            var metadata = GetThreeCluesMetadata(question);
+
+            var bothTeamsLocked =
+                turn.MainTeamLockedPoints.HasValue &&
+                turn.SecondTeamLockedPoints.HasValue;
+
+            var allCluesRevealed =
+                turn.RevealedCluesCount >= metadata.Clues.Count;
+
+            if (!bothTeamsLocked && !allCluesRevealed)
+            {
+                throw new InvalidOperationException(
+                    "Both teams must lock their answers, or all clues must be revealed, before revealing the answer.");
+            }
+        }
+
         if (question.QuestionType == QuestionType.BlindRanking)
         {
             var revealOrder = GetBlindRankingRevealOrder(turn);
@@ -567,16 +721,20 @@ public class GamePlayService : IGamePlayService
 
         var question = turn.GameQuestion.Question;
 
+        var isThreeClues =
+            question.QuestionType == QuestionType.ThreeClues;
+
         var isClosestAnswer =
             question.QuestionType == QuestionType.ClosestAnswer;
 
         var isBlindRanking =
             question.QuestionType == QuestionType.BlindRanking;
 
-        if (isClosestAnswer && turn.IsTrapUsed)
+        if ((isThreeClues || isClosestAnswer) &&
+            turn.IsTrapUsed)
         {
             throw new InvalidOperationException(
-                "Trap cannot be used with closest-answer questions.");
+                "Trap cannot be used with this question type.");
         }
 
         Team? correctTeam = null;
@@ -590,6 +748,9 @@ public class GamePlayService : IGamePlayService
         decimal? correctNumericAnswer = null;
 
         var blindRankingPoints = 0;
+
+        var mainTeamPointsAwarded = 0;
+        var secondTeamPointsAwarded = 0;
 
         /*
          * BlindRanking:
@@ -640,6 +801,53 @@ public class GamePlayService : IGamePlayService
         }
 
         /*
+         * ThreeClues:
+         * كل فريق يتم تقييمه بشكل مستقل،
+         * والنقاط حسب التلميح الذي ثبّت عنده إجابته.
+         */
+        else if (isThreeClues)
+        {
+            var mainTeamIsCorrect =
+                request.MainTeamThreeCluesIsCorrect
+                ?? throw new InvalidOperationException(
+                    "Main team result is required.");
+
+            var secondTeamIsCorrect =
+                request.SecondTeamThreeCluesIsCorrect
+                ?? throw new InvalidOperationException(
+                    "Second team result is required.");
+
+            if (mainTeamIsCorrect &&
+                !turn.MainTeamLockedPoints.HasValue)
+            {
+                throw new InvalidOperationException(
+                    "The main team cannot be marked correct because it did not lock an answer.");
+            }
+
+            if (secondTeamIsCorrect &&
+                !turn.SecondTeamLockedPoints.HasValue)
+            {
+                throw new InvalidOperationException(
+                    "The second team cannot be marked correct because it did not lock an answer.");
+            }
+
+            if (mainTeamIsCorrect)
+            {
+                correctTeams.Add(mainTeam);
+            }
+
+            if (secondTeamIsCorrect)
+            {
+                correctTeams.Add(secondTeam);
+            }
+
+            if (correctTeams.Count == 1)
+            {
+                correctTeam = correctTeams[0];
+            }
+        }
+
+        /*
          * ClosestAnswer:
          * الفائز بيتحدد تلقائيًا من إجابتي الفريقين.
          */
@@ -686,7 +894,7 @@ public class GamePlayService : IGamePlayService
         else
         {
             /*
-             * Standard وThreeClues:
+             * Standard:
              * الـHost هو اللي بيحدد الفريق الصحيح.
              */
             if (request.CorrectTeamId.HasValue)
@@ -755,6 +963,7 @@ public class GamePlayService : IGamePlayService
             IsCorrect = correctTeams.Any(
                 x => x.Id == secondTeam.Id),
             IsSecondChance =
+                !isThreeClues &&
                 !isClosestAnswer &&
                 (!isBlindRanking ||
                  (turn.MainTeamCorrectPositions.HasValue &&
@@ -798,6 +1007,64 @@ public class GamePlayService : IGamePlayService
                         CreatedAt = DateTime.UtcNow
                     });
             }
+        }
+
+        /*
+         * حساب ThreeClues لكل فريق بشكل مستقل.
+         */
+        else if (isThreeClues)
+        {
+            var mainTeamIsCorrect =
+                request.MainTeamThreeCluesIsCorrect == true;
+
+            var secondTeamIsCorrect =
+                request.SecondTeamThreeCluesIsCorrect == true;
+
+            if (mainTeamIsCorrect)
+            {
+                mainTeamPointsAwarded =
+                    turn.MainTeamLockedPoints!.Value;
+
+                mainTeam.Score += mainTeamPointsAwarded;
+
+                _dbContext.ScoreTransactions.Add(
+                    new ScoreTransaction
+                    {
+                        Id = Guid.NewGuid(),
+                        GameSessionId = gameSessionId,
+                        TeamId = mainTeam.Id,
+                        GameTurnId = turn.Id,
+                        Points = mainTeamPointsAwarded,
+                        Reason =
+                            $"Three clues correct answer at clue {turn.MainTeamLockedClueNumber}: +{mainTeamPointsAwarded}",
+                        CreatedAt = DateTime.UtcNow
+                    });
+            }
+
+            if (secondTeamIsCorrect)
+            {
+                secondTeamPointsAwarded =
+                    turn.SecondTeamLockedPoints!.Value;
+
+                secondTeam.Score += secondTeamPointsAwarded;
+
+                _dbContext.ScoreTransactions.Add(
+                    new ScoreTransaction
+                    {
+                        Id = Guid.NewGuid(),
+                        GameSessionId = gameSessionId,
+                        TeamId = secondTeam.Id,
+                        GameTurnId = turn.Id,
+                        Points = secondTeamPointsAwarded,
+                        Reason =
+                            $"Three clues correct answer at clue {turn.SecondTeamLockedClueNumber}: +{secondTeamPointsAwarded}",
+                        CreatedAt = DateTime.UtcNow
+                    });
+            }
+
+            pointsAwarded =
+                mainTeamPointsAwarded +
+                secondTeamPointsAwarded;
         }
 
         /*
@@ -887,10 +1154,7 @@ public class GamePlayService : IGamePlayService
         }
 
         /*
-         * السؤال العادي وThreeClues.
-         *
-         * ThreeClues بيستخدم turn.FinalPoints،
-         * وهي أصلًا اتعدلت حسب عدد التلميحات.
+         * حساب السؤال العادي.
          */
         else if (correctTeam is not null)
         {
@@ -898,20 +1162,9 @@ public class GamePlayService : IGamePlayService
 
             correctTeam.Score += pointsAwarded;
 
-            string reason;
-
-            if (question.QuestionType == QuestionType.ThreeClues)
-            {
-                reason = turn.IsDoublePointsUsed
-                    ? $"Three clues correct answer with double points: +{pointsAwarded}"
-                    : $"Three clues correct answer after {turn.RevealedCluesCount} clue(s): +{pointsAwarded}";
-            }
-            else
-            {
-                reason = turn.IsDoublePointsUsed
-                    ? $"Correct answer with double points: +{pointsAwarded}"
-                    : $"Correct answer: +{pointsAwarded}";
-            }
+            var reason = turn.IsDoublePointsUsed
+                ? $"Correct answer with double points: +{pointsAwarded}"
+                : $"Correct answer: +{pointsAwarded}";
 
             _dbContext.ScoreTransactions.Add(
                 new ScoreTransaction
@@ -958,6 +1211,12 @@ public class GamePlayService : IGamePlayService
             SecondTeamCorrectPositions =
                 turn.SecondTeamCorrectPositions,
 
+            MainTeamPointsAwarded =
+                mainTeamPointsAwarded,
+
+            SecondTeamPointsAwarded =
+                secondTeamPointsAwarded,
+
             PointsAwarded = pointsAwarded,
             Status = turn.Status.ToString(),
 
@@ -1002,11 +1261,12 @@ public class GamePlayService : IGamePlayService
         if (turn is null)
             throw new InvalidOperationException("Game turn not found.");
 
-        if (turn.GameQuestion.Question.QuestionType ==
+        if (turn.GameQuestion.Question.QuestionType is
+                QuestionType.ThreeClues or
                 QuestionType.BlindRanking)
         {
             throw new InvalidOperationException(
-                "Help options cannot be used with blind-ranking questions.");
+                "Help options cannot be used with this question type.");
         }
 
         if (turn.GameQuestion.Question.QuestionType ==

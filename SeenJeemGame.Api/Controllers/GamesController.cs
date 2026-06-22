@@ -103,6 +103,30 @@ public class GamesController : ControllerBase
         }
     }
 
+    [HttpPost(
+    "{gameSessionId:guid}/turns/{gameTurnId:guid}/lock-three-clues-answer")]
+    public async Task<ActionResult<LockThreeCluesAnswerResponse>>
+    LockThreeCluesAnswer(
+        Guid gameSessionId,
+        Guid gameTurnId,
+        LockThreeCluesAnswerRequest request)
+    {
+        try
+        {
+            var response =
+                await _gamePlayService.LockThreeCluesAnswerAsync(
+                    gameSessionId,
+                    gameTurnId,
+                    request);
+
+            return Ok(response);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+    }
+
     [HttpPost("{gameSessionId:guid}/turns/{gameTurnId:guid}/award-points")]
     public async Task<ActionResult<AwardPointsResponse>> AwardPoints(
     Guid gameSessionId,
