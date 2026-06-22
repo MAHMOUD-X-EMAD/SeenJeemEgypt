@@ -23,7 +23,6 @@ public class FinalRoundService : IFinalRoundService
             .AsNoTracking()
             .FirstOrDefaultAsync(x => x.GameSessionId == gameSessionId);
 
-        // لو الجولة اتعملت قبل كده، رجّع حالتها بدل إنشاء واحدة جديدة.
         if (existingFinalRound is not null)
         {
             return MapToResponse(existingFinalRound);

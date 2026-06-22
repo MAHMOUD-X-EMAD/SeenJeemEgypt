@@ -50,8 +50,7 @@ public class GamePlayService : IGamePlayService
                     x.Id == game.CurrentTurnId.Value &&
                     x.Status != TurnStatus.Completed);
 
-            // لو عايز تمنع فتح سؤال جديد أثناء وجود سؤال نشط،
-            // رجع التحقق ده.
+          
             // if (currentTurnIsStillActive)
             //     throw new InvalidOperationException(
             //         "There is already an active question.");
@@ -149,7 +148,6 @@ public class GamePlayService : IGamePlayService
         {
             var metadata = GetThreeCluesMetadata(gameQuestion.Question);
 
-            // أول تلميح يظهر مباشرة عند فتح السؤال.
             revealedCluesCount = 1;
             revealedClues.Add(metadata.Clues[0]);
 
@@ -162,14 +160,12 @@ public class GamePlayService : IGamePlayService
         {
             var metadata = GetClosestAnswerMetadata(gameQuestion.Question);
 
-            // نرسل الوحدة فقط، ولا نرسل الرقم الصحيح.
             closestAnswerUnit = metadata.Unit;
         }
         else if (questionType == QuestionType.BlindRanking)
         {
             var metadata = GetBlindRankingMetadata(gameQuestion.Question);
 
-            // نخزن ترتيب الظهور مرة واحدة فقط داخل الدور حتى لا يتغير بعد Refresh.
             var revealOrder = metadata.Items
                 .OrderBy(_ => Guid.NewGuid())
                 .ToList();
@@ -177,7 +173,6 @@ public class GamePlayService : IGamePlayService
             blindRankingRevealOrderJson =
                 JsonSerializer.Serialize(revealOrder);
 
-            // أول عنصر يظهر مباشرة عند فتح السؤال.
             revealedRankingItemsCount = 1;
             revealedRankingItems = revealOrder
                 .Take(revealedRankingItemsCount)
@@ -186,7 +181,6 @@ public class GamePlayService : IGamePlayService
             hasMoreRankingItems =
                 revealedRankingItemsCount < revealOrder.Count;
 
-            // أعلى جائزة لهذا النوع ثابتة 600.
             pointsBeforeDouble = 600;
         }
 
@@ -360,7 +354,6 @@ public class GamePlayService : IGamePlayService
                 "All clues have already been revealed.");
         }
 
-        // لو RevealedCluesCount = 1، يبقى الـindex القادم هو 1.
         var nextClueIndex = turn.RevealedCluesCount;
 
         turn.RevealedCluesCount++;
